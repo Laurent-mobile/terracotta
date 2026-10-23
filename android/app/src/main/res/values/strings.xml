@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Terra Cotta</string>
+    <string name="title_activity_main">Terra Cotta</string>
+    <string name="package_name">com.terracotta.restaurant</string>
+    <string name="custom_url_scheme">com.terracotta.restaurant</string>
+</resources>

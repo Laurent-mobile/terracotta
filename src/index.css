@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* src/index.css - Ajouter à la fin */
+button {
+    cursor: pointer;
+}
+
+button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Bouton d'inscription */
+.border-blue-600 {
+    border-color: #2563eb !important;
+}
+
+.text-blue-600 {
+    color: #2563eb !important;
+}
+
+.hover\:bg-blue-50:hover {
+    background-color: #eff6ff !important;
+}

@@ -50,3 +50,8 @@ coverage/
 # Supabase local dev (si utilisé)
 supabase/.temp/
 supabase/functions/*/node_modules/
+
+dist-electron/
+dist/
+node_modules/
+*.log

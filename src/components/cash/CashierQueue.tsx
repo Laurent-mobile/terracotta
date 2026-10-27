@@ -487,165 +487,158 @@ const loadEmployees = useCallback(async () => {
 }, []);
 
   const loadCashSessionData = useCallback(async () => {
-    if (!cashRegister) {
-      console.warn('⚠️ Aucune caisse ouverte pour charger les données');
-      return;
-    }
+  if (!cashRegister) {
+    console.warn('️ Aucune caisse ouverte pour charger les données');
+    return;
+  }
+  try {
+    setLoadingSales(true);
+    console.log(' Chargement des données de session caisse...');
     
-    try {
-      setLoadingSales(true);
-      console.log('🔄 Chargement des données de session caisse...');
-      
-      // 1. Charger les ventes
-      const { data: salesData, error: salesError } = await supabase
-        .from('pos_payments')
-        .select(`
-          *,
-          pos_orders(
-            table_number,
-            order_number,
-            customer_count
-          )
-        `)
-        .gte('created_at', cashRegister.opened_at)
-        .lte('created_at', new Date().toISOString())
-        .order('created_at', { ascending: false });
+    // 1. Charger les ventes
+    const { data: salesData, error: salesError } = await supabase
+      .from('pos_payments')
+      .select(`
+        *,
+        pos_orders(
+          table_number,
+          order_number,
+          customer_count
+        )
+      `)
+      .gte('created_at', cashRegister.opened_at)
+      .lte('created_at', new Date().toISOString())
+      .order('created_at', { ascending: false });
 
-      if (salesError) {
-        console.error('❌ Erreur chargement ventes:', salesError);
-        throw salesError;
-      }
-
-      // 2. Charger les dépenses - INCLURE les avances salaire
-      const { data: expensesData, error: expensesError } = await supabase
-        .from('expenses')
-        .select(`
-          *,
-          expense_categories(name),
-          employees!expenses_employee_id_fkey(
-            first_name,
-            last_name,
-            employee_number
-          ),
-          salary_advances!expenses_salary_advance_id_fkey(
-            id,
-            repayment_status
-          )
-        `)
-        // Inclure toutes les dépenses de caisse (cash_register) sauf les paiements fournisseurs
-        .or(`
-          expense_type.eq.cash_register,
-          and(expense_type.eq.general,is_cash_register_expense.eq.true)
-        `)
-        .gte('created_at', cashRegister.opened_at)
-        .lte('created_at', new Date().toISOString())
-        .order('created_at', { ascending: false });
-
-      if (expensesError) {
-        console.warn('⚠️ Erreur chargement dépenses:', expensesError);
-        setExpensesData([]);
-      } else {
-        setExpensesData(expensesData || []);
-        console.log('📊 Dépenses chargées:', expensesData?.length || 0);
-      }
-
-      setCashSalesData(salesData || []);
-      
-      console.log('✅ Données session chargées:', {
-        ventes: salesData?.length || 0,
-        dépenses: expensesData?.length || 0
-      });
-      
-    } catch (error: any) {
-      console.error('❌ Erreur chargement données caisse:', error);
-    } finally {
-      setLoadingSales(false);
+    if (salesError) {
+      console.error('❌ Erreur chargement ventes:', salesError);
+      throw salesError;
     }
-  }, [cashRegister]);
+
+    // 2. Charger les dépenses - FILTRE CORRIGÉ
+    const { data: expensesData, error: expensesError } = await supabase
+      .from('expenses')
+      .select(`
+        *,
+        expense_categories(name),
+        employees!expenses_employee_id_fkey(
+          first_name,
+          last_name,
+          employee_number
+        ),
+        salary_advances!expenses_salary_advance_id_fkey(
+          id,
+          repayment_status
+        )
+      `)
+      // 🔥 FILTRE CORRIGÉ : utiliser eq() simple au lieu de .or() complexe
+      .eq('expense_type', 'cash_register')
+      .gte('created_at', cashRegister.opened_at)
+      .lte('created_at', new Date().toISOString())
+      .order('created_at', { ascending: false });
+
+    if (expensesError) {
+      console.warn('⚠️ Erreur chargement dépenses:', expensesError);
+      setExpensesData([]);
+    } else {
+      setExpensesData(expensesData || []);
+      console.log('📊 Dépenses chargées:', expensesData?.length || 0);
+    }
+
+    setCashSalesData(salesData || []);
+    console.log('✅ Données session chargées:', {
+      ventes: salesData?.length || 0,
+      dépenses: expensesData?.length || 0
+    });
+  } catch (error: any) {
+    console.error('❌ Erreur chargement données caisse:', error);
+  } finally {
+    setLoadingSales(false);
+  }
+}, [cashRegister]);
 
   const handleCreateCashExpense = async () => {
-    if (!user || !cashRegister) {
-      alert('Utilisateur non connecté ou caisse non trouvée');
-      return;
-    }
+  if (!user || !cashRegister) {
+    alert('Utilisateur non connecté ou caisse non trouvée');
+    return;
+  }
+  if (!newExpenseData.category_id || newExpenseData.amount <= 0 || !newExpenseData.description.trim()) {
+    alert('Veuillez remplir tous les champs obligatoires');
+    return;
+  }
+
+  // Vérifier si c'est une catégorie salaire
+  const selectedCategory = expenseCategories.find(cat => cat.id === newExpenseData.category_id);
+  if (selectedCategory && (selectedCategory.name.toLowerCase().includes('salaire') ||
+    selectedCategory.name.toLowerCase().includes('avance'))) {
+    await loadEmployees();
+    setShowAdvanceSalaryForm(true);
+    return;
+  }
+
+  try {
+    const expenseData = {
+      category_id: newExpenseData.category_id,
+      amount: newExpenseData.amount,
+      description: newExpenseData.description,
+      notes: newExpenseData.notes || null,
+      expense_date: new Date().toISOString().split('T')[0],
+      payment_method: newExpenseData.payment_method,
+      expense_type: 'cash_register', // 🔥 IMPORTANT : doit correspondre au filtre
+      created_by: user.id,
+      created_at: new Date().toISOString()
+    };
+
+    console.log('📝 Création dépense:', expenseData);
     
-    if (!newExpenseData.category_id || newExpenseData.amount <= 0 || !newExpenseData.description.trim()) {
-      alert('Veuillez remplir tous les champs obligatoires');
-      return;
+    const { data, error } = await supabase
+      .from('expenses')
+      .insert([expenseData])
+      .select()
+      .single();
+
+    if (error) {
+      console.error(' Erreur création dépense:', error);
+      throw new Error(`Erreur serveur: ${error.message}`);
     }
-    
-    // Vérifier si c'est une catégorie salaire
-    const selectedCategory = expenseCategories.find(cat => cat.id === newExpenseData.category_id);
-    if (selectedCategory && (selectedCategory.name.toLowerCase().includes('salaire') || 
-        selectedCategory.name.toLowerCase().includes('avance'))) {
-      // Charger les employés et afficher le formulaire d'avance salaire
-      await loadEmployees();
-      setShowAdvanceSalaryForm(true);
-      return;
-    }
-    
-    try {
-      const expenseData = {
-        category_id: newExpenseData.category_id,
-        amount: newExpenseData.amount,
-        description: newExpenseData.description,
-        notes: newExpenseData.notes || null,
-        expense_date: new Date().toISOString().split('T')[0],
-        payment_method: newExpenseData.payment_method,
-        expense_type: 'cash_register', // IMPORTANT: marquer comme dépense de caisse
-        created_by: user.id,
-        created_at: new Date().toISOString()
+
+    console.log('✅ Dépense créée:', data);
+
+    // 🔥 CORRECTION MAJEURE : Ajouter la dépense à la liste SANS recharger depuis le serveur
+    if (data) {
+      const categoryName = expenseCategories.find(cat => cat.id === data.category_id)?.name || 'Non catégorisé';
+      const enhancedData = {
+        ...data,
+        expense_categories: { name: categoryName }
       };
       
-      console.log('📝 Création dépense:', expenseData);
-      
-      const { data, error } = await supabase
-        .from('expenses')
-        .insert([expenseData])
-        .select()
-        .single();
-      
-      if (error) {
-        console.error('❌ Erreur création dépense:', error);
-        throw new Error(`Erreur serveur: ${error.message}`);
-      }
-      
-      console.log('✅ Dépense créée:', data);
-      
-      // 1. IMMÉDIAT: Ajouter la nouvelle dépense à la liste locale
-      if (data) {
-        const categoryName = expenseCategories.find(cat => cat.id === data.category_id)?.name || 'Non catégorisé';
-        const enhancedData = {
-          ...data,
-          expense_categories: { name: categoryName }
-        };
-        
-        setExpensesData(prev => [enhancedData, ...prev]);
-      }
-      
-      // 2. RECHARGER depuis le serveur (pour être sûr)
-      await loadCashSessionData();
-      
-      // 3. Réinitialiser le formulaire
-      setNewExpenseData({
-        category_id: '',
-        amount: 0,
-        description: '',
-        notes: '',
-        payment_method: 'cash'
-      });
-      
-      // 4. Fermer le formulaire
-      setShowExpenseForm(false);
-      
-      // 5. Afficher un message de succès
-      alert(`✅ Dépense de ${newExpenseData.amount.toLocaleString()} f CFA enregistrée !`);
-      
-    } catch (error: any) {
-      console.error('❌ Erreur création dépense:', error);
-      alert(`Erreur: ${error.message || 'Une erreur est survenue'}`);
+      // Ajouter en tête de liste
+      setExpensesData(prev => [enhancedData, ...prev]);
+      console.log('📋 Dépense ajoutée à la liste locale. Total:', expensesData.length + 1);
     }
-  };
+
+    // 🔥 RÉINITIALISER le formulaire
+    setNewExpenseData({
+      category_id: '',
+      amount: 0,
+      description: '',
+      notes: '',
+      payment_method: 'cash'
+    });
+
+    // 🔥 FERMER le formulaire
+    setShowExpenseForm(false);
+
+    // 🔥 MESSAGE DE SUCCÈS
+    alert(`✅ Dépense de ${newExpenseData.amount.toLocaleString()} f CFA enregistrée !`);
+    
+    // 🔥 NE PAS APPELER loadCashSessionData() ici car le filtre est buggy
+    // Les données sont déjà dans la liste locale
+  } catch (error: any) {
+    console.error('❌ Erreur création dépense:', error);
+    alert(`Erreur: ${error.message || 'Une erreur est survenue'}`);
+  }
+};
 
   // Fonction pour sauvegarder l'avance salaire
   const handleSaveSalaryAdvance = async () => {

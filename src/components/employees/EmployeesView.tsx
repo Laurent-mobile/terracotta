@@ -579,40 +579,45 @@ const [editFormData, setEditFormData] = useState({
 };
 
   const loadPayrollData = async () => {
-    try {
-      // Charger les périodes de paie
-      const { data: periodsData, error: periodsError } = await supabase
-        .from('payroll_periods')
-        .select('*')
-        .order('start_date', { ascending: false })
-        .limit(12);
-
-      if (periodsError) {
-        console.log('Table payroll_periods not found, initializing empty array');
-        setPayrollPeriods([]);
-      } else {
-        setPayrollPeriods(periodsData || []);
-      }
-
-      // Charger les détails de paie
-      const { data: detailsData, error: detailsError } = await supabase
-        .from('payroll_employee_details')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(50);
-
-      if (detailsError) {
-        console.log('Table payroll_employee_details not found, initializing empty array');
-        setPayrollDetails([]);
-      } else {
-        setPayrollDetails(detailsData || []);
-      }
-    } catch (error) {
-      console.error('Error loading payroll data:', error);
+  try {
+    console.log('🔄 Rechargement des données de paie...');
+    
+    //  Charger les périodes de paie FRAÎCHES
+    const { data: periodsData, error: periodsError } = await supabase
+      .from('payroll_periods')
+      .select('*')
+      .order('start_date', { ascending: false })
+      .limit(12);
+      
+    if (periodsError) {
+      console.error('❌ Erreur chargement périodes:', periodsError);
       setPayrollPeriods([]);
-      setPayrollDetails([]);
+    } else {
+      console.log('✅ Périodes rechargées:', periodsData?.length || 0);
+      setPayrollPeriods(periodsData || []);
     }
-  };
+    
+    // 🔥 Charger les détails de paie FRAIS
+    const { data: detailsData, error: detailsError } = await supabase
+      .from('payroll_employee_details')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(50);
+      
+    if (detailsError) {
+      console.error('❌ Erreur chargement détails:', detailsError);
+      setPayrollDetails([]);
+    } else {
+      console.log('✅ Détails rechargés:', detailsData?.length || 0);
+      setPayrollDetails(detailsData || []);
+    }
+    
+  } catch (error) {
+    console.error('💥 Error loading payroll data:', error);
+    setPayrollPeriods([]);
+    setPayrollDetails([]);
+  }
+};
 
  // Ajoutez cette fonction dans votre composant (remplacez l'ancienne loadPayrollDetails)
 const loadPayrollDetails = async (periodId: string) => {
@@ -1241,49 +1246,74 @@ const handleMarkAsPaid = async (periodId: string) => {
   };
 
   const markPayrollAsPaid = async (periodId: string, paymentMethod: PaymentMethod) => {
-    try {
-      if (!user) {
-        alert('Utilisateur non connecté');
-        return;
-      }
-
-      // 1. Créer les dépenses de salaire
-      await createSalaryExpenses(periodId, paymentMethod);
-
-      // 2. Mettre à jour la période de paie
-      const { error: periodError } = await supabase
-        .from('payroll_periods')
-        .update({
-          status: 'paid',
-          payment_method: paymentMethod.type === 'mobile_money' ? 'mobile_money' : 'cash',
-          payment_reference: paymentMethod.reference,
-          paid_at: new Date().toISOString()
-        })
-        .eq('id', periodId);
-
-      if (periodError) throw periodError;
-
-      // 3. Marquer les détails comme payés
-      const { error: detailsUpdateError } = await supabase
-        .from('payroll_employee_details')
-        .update({
-          status: 'paid',
-          payment_date: new Date().toISOString().split('T')[0],
-          payment_method: paymentMethod.type === 'mobile_money' ? 'mobile_money' : 'cash',
-          payment_reference: paymentMethod.reference
-        })
-        .eq('payroll_period_id', periodId);
-
-      if (detailsUpdateError) throw detailsUpdateError;
-
-      alert('Paie marquée comme payée et les dépenses de salaire ont été créées !');
-      loadPayrollData();
-      
-    } catch (error: any) {
-      console.error('Error marking payroll as paid:', error);
-      alert(`Erreur: ${error.message}`);
+  try {
+    if (!user) {
+      alert('Utilisateur non connecté');
+      return;
     }
-  };
+    
+    console.log('🔄 Début du marquage comme payé pour la période:', periodId);
+    
+    // 🔥 1. TENTER de créer les dépenses (sans bloquer si échec)
+    let expenseCreated = false;
+    try {
+      expenseCreated = await createSalaryExpenses(periodId, paymentMethod);
+      console.log('📊 Dépenses créées:', expenseCreated);
+    } catch (expenseError) {
+      console.warn('⚠️ Erreur création dépenses (non bloquant):', expenseError);
+    }
+    
+    // 🔥 2. Mettre à jour la période (TOUJOURS exécuté)
+    console.log('💾 Mise à jour du statut à "paid"...');
+    const { error: periodError } = await supabase
+      .from('payroll_periods')
+      .update({
+        status: 'paid',
+        payment_method: paymentMethod.type === 'mobile_money' ? 'mobile_money' : 'cash',
+        payment_reference: paymentMethod.reference,
+        paid_at: new Date().toISOString()
+      })
+      .eq('id', periodId);
+    
+    if (periodError) {
+      console.error('❌ Erreur mise à jour période:', periodError);
+      throw periodError;
+    }
+    
+    console.log('✅ Période marquée comme payée');
+    
+    // 🔥 3. Marquer les détails comme payés
+    const { error: detailsUpdateError } = await supabase
+      .from('payroll_employee_details')
+      .update({
+        status: 'paid',
+        payment_date: new Date().toISOString().split('T')[0],
+        payment_method: paymentMethod.type === 'mobile_money' ? 'mobile_money' : 'cash',
+        payment_reference: paymentMethod.reference
+      })
+      .eq('payroll_period_id', periodId);
+    
+    if (detailsUpdateError) {
+      console.error('⚠️ Erreur mise à jour détails:', detailsUpdateError);
+    }
+    
+    // 🔥 4. Message adapté
+    if (expenseCreated) {
+      alert('✅ Paie marquée comme payée et dépenses créées !');
+    } else {
+      alert('⚠️ Paie marquée comme payée, mais création des dépenses échouée.');
+    }
+    
+    // 🔥 5. Recharger et fermer
+    await loadPayrollData();
+    setShowPaymentMethodModal(false);
+    setSelectedPeriodForPayment(null);
+    
+  } catch (error: any) {
+    console.error('❌ Error:', error);
+    alert(`Erreur: ${error.message}`);
+  }
+};
 
   const getSalaryCategoryId = async (): Promise<string> => {
     try {
@@ -1523,86 +1553,82 @@ const handleMarkAsPaid = async (periodId: string) => {
   };
 
   const createSalaryExpenses = async (periodId: string, paymentMethod: PaymentMethod) => {
-    try {
-      if (!user) return;
-
-      console.log('Création des dépenses de salaire pour la période:', periodId);
-
-      const { data: payrollDetails, error } = await supabase
-        .from('payroll_employee_details')
-        .select(`
-          *,
-          employees:employee_id(first_name, last_name)
-        `)
-        .eq('payroll_period_id', periodId);
-
-      if (error) {
-        console.error('Error fetching payroll details:', error);
-        throw error;
-      }
-
-      if (!payrollDetails || payrollDetails.length === 0) {
-        console.log('Aucun détail de paie trouvé');
-        return;
-      }
-
-      console.log(`${payrollDetails.length} détails de paie à traiter`);
-
-      const salaryCategoryId = await getSalaryCategoryId();
-
-      const period = payrollPeriods.find(p => p.id === periodId);
-      const periodName = period ? period.period_name : 'Période inconnue';
-      const expenseDate = period?.end_date || new Date().toISOString().split('T')[0];
-
-      const expensePromises = payrollDetails.map(async (detail) => {
-        const employeeName = detail.employees ?
-          `${detail.employees.first_name} ${detail.employees.last_name}` :
-          'Employé inconnu';
-
-        const expenseData = {
-          category_id: salaryCategoryId,
-          amount: detail.net_salary,
-          expense_date: expenseDate,
-          payment_method: paymentMethod.type === 'mobile_money' ? 'mobile_money' : 'cash',
-          description: `Salaire - ${employeeName} - ${periodName}`,
-          notes: paymentMethod.reference ? 
-            `Référence: ${paymentMethod.reference}` : 
-            `Salaire pour la période: ${periodName}`,
-          expense_type: 'general',
-          expense_category_type: 'fixed',
-          is_recurring: true,
-          recurrence_frequency: 'monthly',
-          created_by: user.id,
-          is_salary_expense: true,
-          payroll_period_id: periodId,
-          employee_id: detail.employee_id
-        };
-
-        console.log('Création de dépense pour:', employeeName, '- Montant:', detail.net_salary);
-
-        const { error: expenseError } = await supabase
-          .from('expenses')
-          .insert([expenseData]);
-
-        if (expenseError) {
-          console.error('Error creating expense for', employeeName, ':', expenseError);
-          throw expenseError;
-        }
-
-        console.log('Dépense créée pour:', employeeName);
-        return true;
-      });
-
-      await Promise.all(expensePromises);
+  try {
+    if (!user) return;
+    console.log('💰 Création de la dépense de salaire GLOBALE pour la période:', periodId);
+    
+    const { data: payrollDetails, error } = await supabase
+      .from('payroll_employee_details')
+      .select(`
+        *,
+        employees:employee_id(first_name, last_name, employee_number)
+      `)
+      .eq('payroll_period_id', periodId);
       
-      console.log('Toutes les dépenses de salaire ont été créées avec succès');
-      
-      return true;
-    } catch (error) {
-      console.error('Error in createSalaryExpenses:', error);
+    if (error) {
+      console.error('❌ Erreur récupération détails paie:', error);
       throw error;
     }
-  };
+    
+    if (!payrollDetails || payrollDetails.length === 0) {
+      console.log('⚠️ Aucun détail de paie trouvé');
+      return;
+    }
+
+    const salaryCategoryId = await getSalaryCategoryId();
+    const period = payrollPeriods.find(p => p.id === periodId);
+    const periodName = period ? period.period_name : 'Période inconnue';
+    const expenseDate = period?.end_date || new Date().toISOString().split('T')[0];
+    
+    // 🔥 1. Calculer le montant TOTAL de la masse salariale
+    const totalNetSalary = payrollDetails.reduce((sum, detail) => sum + (detail.net_salary || 0), 0);
+    
+    // 🔥 2. Créer un récapitulatif détaillé pour les notes
+    const detailsNotes = payrollDetails.map(detail => {
+      const emp = detail.employees;
+      const empName = emp ? `${emp.first_name} ${emp.last_name} (${emp.employee_number || 'N/A'})` : 'Employé inconnu';
+      return `- ${empName} : ${detail.net_salary.toLocaleString()} f CFA`;
+    }).join('\n');
+
+    // 🔥 3. Créer UNE SEULE dépense globale (évite les erreurs 409)
+    const expenseData = {
+      category_id: salaryCategoryId,
+      amount: totalNetSalary,
+      expense_date: expenseDate,
+      payment_method: paymentMethod.type === 'mobile_money' ? 'mobile_money' : 'cash',
+      description: `MASSE SALARIALE GLOBALE - ${periodName}`,
+      notes: `Période: ${periodName}\nRéférence: ${paymentMethod.reference || 'N/A'}\nMode: ${paymentMethod.type}\n\nDÉTAIL PAR EMPLOYÉ:\n${detailsNotes}`,
+      expense_type: 'general',
+      expense_category_type: 'fixed',
+      is_recurring: true,
+      recurrence_frequency: 'monthly',
+      created_by: user.id,
+      is_salary_expense: true,
+      payroll_period_id: periodId
+      // Note: employee_id est omis car c'est une dépense globale
+    };
+
+    console.log('📊 Création dépense globale - Montant total:', totalNetSalary, 'f CFA');
+    
+    const { error: expenseError } = await supabase
+      .from('expenses')
+      .insert([expenseData]);
+      
+    if (expenseError) {
+      console.error('❌ Erreur création dépense globale:', expenseError);
+      // ⚠️ NE PAS THROW - on continue pour mettre à jour le statut
+      console.warn('⚠️ La dépense n\'a pas pu être créée, mais le statut de paie sera quand même mis à jour');
+      return false;
+    }
+    
+    console.log('✅ Dépense globale de salaire créée avec succès');
+    return true;
+  } catch (error) {
+    console.error(' Error in createSalaryExpenses:', error);
+    // ⚠️ NE PAS THROW - on retourne false pour indiquer l'échec sans bloquer
+    return false;
+  }
+};
 
   const handleEditEmployee = (employee: EmployeeWithDetails) => {
     setSelectedEmployee(employee);

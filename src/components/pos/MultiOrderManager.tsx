@@ -2636,54 +2636,148 @@ table { width: 100%; border-collapse: collapse; margin: 6px 0; }
       alert('Erreur lors de la confirmation de la commande');
     }
   };
-
-  const sendToCashier = async () => {
-    if (!confirm('Êtes-vous sûr de vouloir envoyer cette commande à la caisse pour paiement ?')) {
-      return;
+// Fonction pour l'encaissement direct (bypass la file d'attente)
+const handleDirectPayment = async () => {
+  if (!confirm(`Confirmer le paiement de ${totals.total.toLocaleString()} f CFA pour la table ${order.table_number} ?`)) {
+    return;
+  }
+  
+  setIsSendingToCashier(true);
+  try {
+    console.log('💰 Encaissement direct - Commande:', order.id);
+    
+    // 1. Mettre à jour le statut à 'paid' directement
+    const { error: orderUpdateError } = await supabase
+      .from('pos_orders')
+      .update({
+        status: 'paid',
+        payment_method: 'cash',
+        paid_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', order.id);
+      
+    if (orderUpdateError) throw orderUpdateError;
+    
+    console.log('✅ Commande marquée comme payée');
+    
+    // 2. Créer l'enregistrement de paiement
+    const receiptNumber = `REC-${Date.now()}`;
+    const { error: paymentError } = await supabase
+      .from('pos_payments')
+      .insert({
+        order_id: order.id,
+        amount_paid: totals.total,
+        payment_method: 'cash',
+        change_amount: 0,
+        receipt_number: receiptNumber,
+        created_by: user?.id,
+        customer_ticket: null,
+      });
+      
+    if (paymentError) {
+      console.error('⚠️ Erreur création paiement:', paymentError);
+      // Continuer quand même car la commande est marquée payée
+    } else {
+      console.log('✅ Paiement enregistré:', receiptNumber);
     }
-    setIsSendingToCashier(true);
-    try {
-      const { error: orderUpdateError } = await supabase
-        .from('pos_orders')
+    
+    // 3. Libérer la table
+    if (order.table_id) {
+      await supabase
+        .from('pos_tables')
         .update({
-          status: 'ready',
-          updated_at: new Date().toISOString(),
+          status: 'available',
+          current_order_id: null
         })
-        .eq('id', order.id);
-      if (orderUpdateError) throw orderUpdateError;
-      console.log('✅ Commande mise à jour, envoi des événements...');
-      const newOrderEvent = new CustomEvent('new-order-ready', {
-        detail: { orderId: order.id }
-      });
-      window.dispatchEvent(newOrderEvent);
-      const paymentEvent = new CustomEvent('navigate-to-payment', {
-        detail: {
-          orderId: order.id,
-          tableNumber: order.table_number,
-          orderNumber: order.order_number
-        }
-      });
-      setTimeout(() => {
-        window.dispatchEvent(paymentEvent);
-        console.log(' Événements envoyés');
-      }, 500);
-      alert(`✅ Commande envoyée à la caisse avec succès !
-Table: ${order.table_number}
-N° Commande: ${order.order_number}
-Redirection vers le module de paiement...`);
-      setTimeout(() => {
-        if (onOrderUpdated) {
-          onOrderUpdated();
-        }
-        onClose();
-      }, 1500);
-    } catch (error) {
-      console.error('❌ Erreur envoi à la caisse:', error);
-      alert('Erreur lors de l\'envoi à la caisse.');
-    } finally {
-      setIsSendingToCashier(false);
+        .eq('id', order.table_id);
+      console.log('✅ Table libérée');
     }
-  };
+    
+    // 4. Mettre à jour l'état local
+    setOrderStatus('paid');
+    
+    alert(`✅ Paiement encaissé avec succès !
+
+💰 Montant: ${totals.total.toLocaleString()} f CFA
+🧾 Reçu: ${receiptNumber}
+ Table ${order.table_number} libérée`);
+    
+    // 5. Fermer la vue
+    setTimeout(() => {
+      if (onOrderUpdated) onOrderUpdated();
+      onClose();
+    }, 1500);
+    
+  } catch (error: any) {
+    console.error('❌ Erreur encaissement direct:', error);
+    alert(`Erreur lors de l'encaissement: ${error.message}`);
+  } finally {
+    setIsSendingToCashier(false);
+  }
+};
+  const sendToCashier = async () => {
+  if (!confirm('Êtes-vous sûr de vouloir envoyer cette commande à la caisse pour paiement ?')) {
+    return;
+  }
+  setIsSendingToCashier(true);
+  try {
+    console.log('🔄 Envoi à la caisse - Commande:', order.id, 'Statut actuel:', orderStatus);
+    
+    // 1. Mettre à jour le statut dans la base de données
+    const { error: orderUpdateError } = await supabase
+      .from('pos_orders')
+      .update({
+        status: 'ready',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', order.id);
+      
+    if (orderUpdateError) {
+      console.error('❌ Erreur mise à jour statut:', orderUpdateError);
+      throw orderUpdateError;
+    }
+    
+    console.log('✅ Statut mis à jour à "ready" dans la base');
+    
+    // 2. Mettre à jour l'état local IMMÉDIATEMENT
+    setOrderStatus('ready');
+    
+    // 3. Émettre l'événement pour CashierQueue avec un délai
+    const paymentEvent = new CustomEvent('navigate-to-payment', {
+      detail: {
+        orderId: order.id,
+        tableNumber: order.table_number,
+        orderNumber: order.order_number
+      }
+    });
+    
+    // Donner du temps à Supabase de propager le changement
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    window.dispatchEvent(paymentEvent);
+    console.log('📤 Événement navigate-to-payment émis');
+    
+    alert(`✅ Commande envoyée à la caisse avec succès !
+
+📍 Table: ${order.table_number}
+🔢 N° Commande: ${order.order_number}
+
+La commande apparaît maintenant dans la file d'attente de la caisse.`);
+    
+    // 4. Fermer la vue après un délai
+    setTimeout(() => {
+      if (onOrderUpdated) onOrderUpdated();
+      onClose();
+    }, 2000);
+    
+  } catch (error: any) {
+    console.error('❌ Erreur envoi à la caisse:', error);
+    alert(`Erreur lors de l'envoi à la caisse: ${error.message}`);
+  } finally {
+    setIsSendingToCashier(false);
+  }
+};
 
   const renderCategoriesWithSearch = () => {
     const filteredMenuItems = filterMenuItems(menuData.menuItems, searchTerm);

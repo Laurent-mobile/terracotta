@@ -13,6 +13,8 @@ import {
   Clock,
   Eye,
   Download,
+  Printer,
+  Save,
   UserCheck,
   CalendarDays,
   TrendingUp,
@@ -201,6 +203,22 @@ export default function EmployeesView() {
     type: 'advance' as 'advance' | 'bonus' | 'deduction',
     date: new Date().toISOString().split('T')[0]
   });
+
+ // NOUVEAUX ÉTATS POUR LES DÉTAILS DE PAIE
+const [showPayrollDetails, setShowPayrollDetails] = useState(false);
+const [selectedPayrollPeriod, setSelectedPayrollPeriod] = useState<any>(null);
+const [detailedPayrollData, setDetailedPayrollData] = useState<any[]>([]);
+const [loadingDetails, setLoadingDetails] = useState(false);
+const [showEditPayroll, setShowEditPayroll] = useState(false);
+const [editingPayrollDetail, setEditingPayrollDetail] = useState<any>(null);
+const [editFormData, setEditFormData] = useState({
+  base_salary: 0,
+  overtime_hours: 0,
+  bonus_amount: 0,
+  advance_deductions: 0,
+  other_deductions: 0,
+  notes: ''
+});
 
   // État pour le menu déroulant des actions financières
   const [openFinanceMenu, setOpenFinanceMenu] = useState<string | null>(null);
@@ -517,44 +535,48 @@ export default function EmployeesView() {
   };
 
   const loadLeaveRequests = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('leave_requests')
-        .select(`
-          *,
-          employees:employee_id(first_name, last_name)
-        `)
-        .order('start_date', { ascending: false })
-        .limit(50);
-
-      if (error) {
-        console.log('Table leave_requests not found or error:', error);
-        setLeaveRequests([]);
-        return;
-      }
-
-      const formattedData = data?.map(item => ({
-        id: item.id,
-        employee_id: item.employee_id,
-        leave_type: item.leave_type,
-        start_date: item.start_date,
-        end_date: item.end_date,
-        total_days: item.total_days,
-        reason: item.reason,
-        status: item.status,
-        approved_by: item.approved_by,
-        approved_at: item.approved_at,
-        employee_name: item.employees ? 
-          `${item.employees.first_name} ${item.employees.last_name}` : 
-          'Employé inconnu'
-      })) || [];
-
-      setLeaveRequests(formattedData);
-    } catch (error) {
-      console.error('Error loading leave requests:', error);
+  try {
+    const { data, error } = await supabase
+      .from('leave_requests')
+      .select(`
+        *,
+        employees:employee_id(
+          first_name, 
+          last_name, 
+          employee_departments!department_id(name)
+        )
+      `)
+      .order('start_date', { ascending: false })
+      .limit(50);
+      
+    if (error) {
+      console.log('Table leave_requests not found or error:', error);
       setLeaveRequests([]);
+      return;
     }
-  };
+    
+    const formattedData = data?.map(item => ({
+      id: item.id,
+      employee_id: item.employee_id,
+      leave_type: item.leave_type,
+      start_date: item.start_date,
+      end_date: item.end_date,
+      total_days: item.total_days,
+      reason: item.reason,
+      status: item.status,
+      approved_by: item.approved_by,
+      approved_at: item.approved_at,
+      employee_name: item.employees ?
+        `${item.employees.first_name} ${item.employees.last_name}` :
+        'Employé inconnu'
+    })) || [];
+    
+    setLeaveRequests(formattedData);
+  } catch (error) {
+    console.error('Error loading leave requests:', error);
+    setLeaveRequests([]);
+  }
+};
 
   const loadPayrollData = async () => {
     try {
@@ -591,6 +613,253 @@ export default function EmployeesView() {
       setPayrollDetails([]);
     }
   };
+
+ // Ajoutez cette fonction dans votre composant (remplacez l'ancienne loadPayrollDetails)
+const loadPayrollDetails = async (periodId: string) => {
+  try {
+    const { data, error } = await supabase
+      .from('payroll_employee_details')
+      .select(`
+        *,
+        employees:employee_id(
+          first_name, 
+          last_name, 
+          employee_number, 
+          employee_departments!department_id(name)
+        )
+      `)
+      .eq('payroll_period_id', periodId);
+
+    if (error) throw error;
+    setPayrollDetails(data || []);
+  } catch (error) {
+    console.error('Error loading payroll details:', error);
+  }
+};
+
+// Modifier un détail de paie (uniquement si statut = calculated)
+const handleEditPayrollDetail = (detail: any) => {
+  if (selectedPayrollPeriod?.status !== 'calculated') {
+    alert('Vous ne pouvez modifier que les paies en statut "Calculé"');
+    return;
+  }
+  setEditingPayrollDetail(detail);
+  setEditFormData({
+    base_salary: detail.base_salary || 0,
+    overtime_hours: detail.overtime_hours || 0,
+    bonus_amount: detail.bonus_amount || 0,
+    advance_deductions: detail.advance_deductions || 0,
+    other_deductions: detail.other_deductions || 0,
+    notes: detail.notes || ''
+  });
+  setShowEditPayroll(true);
+};
+
+// Charger les détails complets d'une période de paie
+const loadPayrollPeriodDetails = async (periodId: string) => {
+  try {
+    setLoadingDetails(true);
+    console.log('🔍 Chargement des détails pour la période:', periodId);
+    
+    // 1. Charger la période
+    const { data: period, error: periodError } = await supabase
+      .from('payroll_periods')
+      .select('*')
+      .eq('id', periodId)
+      .single();
+      
+    if (periodError) {
+      console.error('❌ Erreur chargement période:', periodError);
+      throw periodError;
+    }
+    setSelectedPayrollPeriod(period);
+    
+    // 2. Charger les détails de paie (requête simplifiée pour éviter les échecs de jointure)
+    const { data: details, error: detailsError } = await supabase
+      .from('payroll_employee_details')
+      .select(`
+        *,
+        employees:employee_id(
+          id,
+          employee_number,
+          first_name,
+          last_name,
+          position_id,
+          department_id
+        )
+      `)
+      .eq('payroll_period_id', periodId)
+      .order('created_at', { ascending: true });
+      
+    if (detailsError) {
+      console.error('❌ Erreur chargement détails:', detailsError);
+      throw detailsError;
+    }
+    
+    console.log('📊 Détails bruts chargés:', details?.length || 0, 'employés');
+    
+    if (!details || details.length === 0) {
+      console.warn('⚠️ Aucun détail de paie trouvé pour cette période. Avez-vous bien cliqué sur "Enregistrer la Paie" après le calcul ?');
+      setDetailedPayrollData([]);
+      setShowPayrollDetails(true);
+      setLoadingDetails(false);
+      return;
+    }
+
+    // 3. Charger les positions et départements séparément pour plus de fiabilité
+    const positionIds = [...new Set(details.map(d => d.employees?.position_id).filter(Boolean))];
+    const departmentIds = [...new Set(details.map(d => d.employees?.department_id).filter(Boolean))];
+    
+    let employeesWithDetails = details;
+    
+    if (positionIds.length > 0 || departmentIds.length > 0) {
+      const { data: positions } = await supabase
+        .from('employee_positions')
+        .select('id, name')
+        .in('id', positionIds);
+        
+      const { data: departments } = await supabase
+        .from('employee_departments')
+        .select('id, name')
+        .in('id', departmentIds);
+        
+      const positionsMap = new Map(positions?.map(p => [p.id, p.name]) || []);
+      const departmentsMap = new Map(departments?.map(d => [d.id, d.name]) || []);
+      
+      // Enrichir les données des employés
+      employeesWithDetails = details.map(detail => ({
+        ...detail,
+        employees: {
+          ...detail.employees,
+          position_name: detail.employees?.position_id ? positionsMap.get(detail.employees.position_id) : 'Non défini',
+          department_name: detail.employees?.department_id ? departmentsMap.get(detail.employees.department_id) : 'Non défini'
+        }
+      }));
+    }
+
+    // 4. Charger les avances, primes et déductions pour chaque employé
+    const detailsWithFinance = await Promise.all(
+      employeesWithDetails.map(async (detail) => {
+        const empId = detail.employee_id;
+        const startDate = period.start_date;
+        const endDate = period.end_date;
+
+        const { data: advances } = await supabase
+          .from('salary_advances')
+          .select('*')
+          .eq('employee_id', empId)
+          .gte('advance_date', startDate)
+          .lte('advance_date', endDate);
+          
+        const { data: bonuses } = await supabase
+          .from('bonuses')
+          .select('*')
+          .eq('employee_id', empId)
+          .gte('bonus_date', startDate)
+          .lte('bonus_date', endDate);
+          
+        const { data: deductions } = await supabase
+          .from('deductions')
+          .select('*')
+          .eq('employee_id', empId)
+          .gte('deduction_date', startDate)
+          .lte('deduction_date', endDate);
+          
+        return {
+          ...detail,
+          advances: advances || [],
+          bonuses: bonuses || [],
+          deductions: deductions || []
+        };
+      })
+    );
+    
+    console.log('✅ Détails finaux chargés avec succès:', detailsWithFinance.length, 'employés');
+    setDetailedPayrollData(detailsWithFinance);
+    setShowPayrollDetails(true);
+  } catch (error: any) {
+    console.error('❌ Erreur chargement détails paie:', error);
+    alert(`Erreur: ${error.message}`);
+  } finally {
+    setLoadingDetails(false);
+  }
+};
+
+// Sauvegarder les modifications d'un détail de paie
+const handleSavePayrollEdit = async () => {
+  if (!editingPayrollDetail || !selectedPayrollPeriod) return;
+  try {
+    const overtimeRate = (editFormData.base_salary || 0) / 173;
+    const overtimeAmount = (editFormData.overtime_hours || 0) * overtimeRate * 1.25;
+    const grossSalary = editFormData.base_salary + overtimeAmount + editFormData.bonus_amount;
+    const totalDeductions = editFormData.advance_deductions + editFormData.other_deductions;
+    const netSalary = Math.max(0, grossSalary - totalDeductions);
+    
+    const { error } = await supabase
+      .from('payroll_employee_details')
+      .update({
+        base_salary: editFormData.base_salary,
+        overtime_hours: editFormData.overtime_hours,
+        overtime_amount: overtimeAmount,
+        bonus_amount: editFormData.bonus_amount,
+        advance_deductions: editFormData.advance_deductions,
+        other_deductions: editFormData.other_deductions,
+        gross_salary: grossSalary,
+        net_salary: netSalary,
+        notes: editFormData.notes,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', editingPayrollDetail.id);
+      
+    if (error) throw error;
+    
+    const { data: updatedDetails } = await supabase
+      .from('payroll_employee_details')
+      .select('net_salary')
+      .eq('payroll_period_id', selectedPayrollPeriod.id);
+      
+    const newTotal = updatedDetails?.reduce((sum: any, d: any) => sum + (d.net_salary || 0), 0) || 0;
+    
+    await supabase
+      .from('payroll_periods')
+      .update({ total_amount: newTotal })
+      .eq('id', selectedPayrollPeriod.id);
+    
+    alert('✅ Modifications enregistrées avec succès !');
+    setShowEditPayroll(false);
+    setEditingPayrollDetail(null);
+    loadPayrollPeriodDetails(selectedPayrollPeriod.id);
+    loadPayrollData();
+  } catch (error: any) {
+    console.error('Error saving payroll edit:', error);
+    alert(`Erreur: ${error.message}`);
+  }
+};
+
+// Imprimer UN SEUL bulletin
+const printSinglePaySlip = (detail: any) => {
+  const tempData = [detail];
+  const originalData = detailedPayrollData;
+  setDetailedPayrollData(tempData);
+  
+  setTimeout(() => {
+    printAllPaySlips(selectedPayrollPeriod?.id || '');
+    setDetailedPayrollData(originalData);
+  }, 100);
+};
+
+// Marquer la paie comme payée après modifications
+const handleMarkAsPaid = async (periodId: string) => {
+  if (!confirm('Confirmer le paiement de cette période de paie ?')) return;
+  
+  setPaymentMethodData({
+    type: 'mobile_money',
+    reference: '',
+    transaction_date: new Date().toISOString().split('T')[0]
+  });
+  setSelectedPeriodForPayment(periodId);
+  setShowPaymentMethodModal(true);
+};
 
   const getEmployeeAdvances = async (employeeId: string) => {
     try {
@@ -1392,24 +1661,50 @@ export default function EmployeesView() {
     }
   };
 
-  const handleDeleteEmployee = async (employeeId: string) => {
-    if (!confirm('Êtes-vous sûr de vouloir supprimer cet employé ?')) return;
-
-    try {
+  const handleDeleteEmployee = async (employeeId: string, currentStatus: string) => {
+  try {
+    if (currentStatus === 'active') {
+      // ÉTAPE 1 : Désactivation (Soft Delete)
+      if (!confirm('Êtes-vous sûr de vouloir désactiver cet employé ? Il ne pourra plus se connecter et n\'apparaîtra plus dans les listes par défaut.')) return;
+      
       const { error } = await supabase
         .from('employees')
-        .update({ status: 'inactive' })
+        .update({ 
+          status: 'inactive', 
+          updated_at: new Date().toISOString() 
+        })
+        .eq('id', employeeId);
+        
+      if (error) throw error;
+      alert('✅ Employé désactivé avec succès');
+      
+    } else {
+      // ÉTAPE 2 : Suppression définitive (Hard Delete) pour les inactifs
+      if (!confirm('⚠️ ATTENTION : Vous allez SUPPRIMER DÉFINITIVEMENT cet employé de la base de données.\n\nCette action est irréversible et peut affecter l\'historique (paie, présences). Continuer ?')) return;
+
+      const { error } = await supabase
+        .from('employees')
+        .delete()
         .eq('id', employeeId);
 
-      if (error) throw error;
-
-      loadEmployees();
-      alert('Employé désactivé avec succès');
-    } catch (error) {
-      console.error('Error deleting employee:', error);
-      alert('Erreur lors de la suppression');
+      if (error) {
+        // Gestion élégante des erreurs de clé étrangère (ex: l'employé a des fiches de paie)
+        if (error.code === '23503') {
+          alert('⛔ Impossible de supprimer définitivement : Cet employé possède un historique lié (paie, présences, congés, etc.).\n\n💡 Conseil : Laissez-le simplement en statut "Inactif".');
+          return;
+        }
+        throw error;
+      }
+      alert('🗑️ Employé supprimé définitivement avec succès');
     }
-  };
+    
+    // Recharger la liste
+    loadEmployees();
+  } catch (error: any) {
+    console.error('Error deleting employee:', error);
+    alert(`❌ Erreur : ${error.message}`);
+  }
+};
 
   const handleCheckIn = async (employeeId: string) => {
     try {
@@ -1701,174 +1996,167 @@ export default function EmployeesView() {
 
   // Composant pour l'onglet Paie
   const renderPayrollTab = () => (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h3 className="text-lg font-semibold text-slate-900">Gestion de la Paie</h3>
-        <div className="flex space-x-3">
-          <button 
+  <div className="space-y-6">
+    <div className="flex justify-between items-center">
+      <h3 className="text-lg font-semibold text-slate-900">Gestion de la Paie</h3>
+      <div className="flex space-x-3">
+        <button
+          onClick={calculatePayroll}
+          disabled={formLoading}
+          className="bg-green-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-green-700 disabled:opacity-50 transition flex items-center"
+        >
+          <Calculator className="w-4 h-4 inline mr-2" />
+          <span className="hidden sm:inline">Calculer la Paie</span>
+          <span className="sm:hidden">Calculer</span>
+        </button>
+      </div>
+    </div>
+
+    {/* Période de paie */}
+    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+      <h4 className="font-semibold text-slate-900 mb-4">Période de Paie</h4>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-2">Date de début</label>
+          <input
+            type="date"
+            value={payrollPeriod.start}
+            onChange={(e) => setPayrollPeriod(prev => ({ ...prev, start: e.target.value }))}
+            className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-2">Date de fin</label>
+          <input
+            type="date"
+            value={payrollPeriod.end}
+            onChange={(e) => setPayrollPeriod(prev => ({ ...prev, end: e.target.value }))}
+            className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500"
+          />
+        </div>
+        <div className="flex items-end">
+          <button
             onClick={calculatePayroll}
             disabled={formLoading}
-            className="bg-green-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-green-700 disabled:opacity-50 transition flex items-center"
+            className="w-full bg-slate-800 text-white px-4 py-2 rounded-lg font-medium hover:bg-slate-700 disabled:opacity-50 transition"
           >
-            <Calculator className="w-4 h-4 inline mr-2" />
-            <span className="hidden sm:inline">Calculer la Paie</span>
-            <span className="sm:hidden">Calculer</span>
+            {formLoading ? 'Calcul...' : 'Calculer'}
           </button>
         </div>
       </div>
+    </div>
 
-      {/* Période de paie */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-        <h4 className="font-semibold text-slate-900 mb-4">Période de Paie</h4>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+    {/* Statistiques */}
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+        <div className="flex items-center justify-between">
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Date de début</label>
-            <input
-              type="date"
-              value={payrollPeriod.start}
-              onChange={(e) => setPayrollPeriod(prev => ({ ...prev, start: e.target.value }))}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500"
-            />
+            <p className="text-xs lg:text-sm text-slate-600 mb-1">Masse salariale</p>
+            <p className="text-lg lg:text-2xl font-bold text-slate-900">
+              {employees.filter(e => e.status === 'active').reduce((sum, emp) => sum + (emp.base_salary || 0), 0).toLocaleString()} f CFA
+            </p>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Date de fin</label>
-            <input
-              type="date"
-              value={payrollPeriod.end}
-              onChange={(e) => setPayrollPeriod(prev => ({ ...prev, end: e.target.value }))}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500"
-            />
-          </div>
-          <div className="flex items-end">
-            <button
-              onClick={calculatePayroll}
-              disabled={formLoading}
-              className="w-full bg-slate-800 text-white px-4 py-2 rounded-lg font-medium hover:bg-slate-700 disabled:opacity-50 transition"
-            >
-              {formLoading ? 'Calcul...' : 'Calculer'}
-            </button>
+          <div className="bg-blue-100 p-2 rounded-lg">
+            <DollarSign className="w-5 h-5 lg:w-6 lg:h-6 text-blue-600" />
           </div>
         </div>
       </div>
-
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs lg:text-sm text-slate-600 mb-1">Masse salariale</p>
-              <p className="text-lg lg:text-2xl font-bold text-slate-900">
-                {employees
-                  .filter(e => e.status === 'active')
-                  .reduce((sum, emp) => sum + (emp.base_salary || 0), 0)
-                  .toLocaleString()} f CFA
-              </p>
-            </div>
-            <div className="bg-blue-100 p-2 rounded-lg">
-              <DollarSign className="w-5 h-5 lg:w-6 lg:h-6 text-blue-600" />
-            </div>
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs lg:text-sm text-slate-600 mb-1">Déductions ce mois</p>
+            <p className="text-lg lg:text-2xl font-bold text-slate-900">
+              {employees.reduce((sum, emp) => sum + (emp.total_deductions || 0), 0).toLocaleString()} f CFA
+            </p>
           </div>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs lg:text-sm text-slate-600 mb-1">Déductions ce mois</p>
-              <p className="text-lg lg:text-2xl font-bold text-slate-900">
-                {employees.reduce((sum, emp) => sum + (emp.total_deductions || 0), 0).toLocaleString()} f CFA
-              </p>
-            </div>
-            <div className="bg-red-100 p-2 rounded-lg">
-              <TrendingUp className="w-5 h-5 lg:w-6 lg:h-6 text-red-600" />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs lg:text-sm text-slate-600 mb-1">Avances en cours</p>
-              <p className="text-lg lg:text-2xl font-bold text-slate-900">
-                {employees.reduce((sum, emp) => sum + (emp.total_advances || 0), 0).toLocaleString()} f CFA
-              </p>
-            </div>
-            <div className="bg-amber-100 p-2 rounded-lg">
-              <TrendingUp className="w-5 h-5 lg:w-6 lg:h-6 text-amber-600" />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs lg:text-sm text-slate-600 mb-1">Primes ce mois</p>
-              <p className="text-lg lg:text-2xl font-bold text-slate-900">
-                {employees.reduce((sum, emp) => sum + (emp.total_bonuses || 0), 0).toLocaleString()} f CFA
-              </p>
-            </div>
-            <div className="bg-green-100 p-2 rounded-lg">
-              <TrendingUp className="w-5 h-5 lg:w-6 lg:h-6 text-green-600" />
-            </div>
+          <div className="bg-red-100 p-2 rounded-lg">
+            <TrendingUp className="w-5 h-5 lg:w-6 lg:h-6 text-red-600" />
           </div>
         </div>
       </div>
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs lg:text-sm text-slate-600 mb-1">Avances en cours</p>
+            <p className="text-lg lg:text-2xl font-bold text-slate-900">
+              {employees.reduce((sum, emp) => sum + (emp.total_advances || 0), 0).toLocaleString()} f CFA
+            </p>
+          </div>
+          <div className="bg-amber-100 p-2 rounded-lg">
+            <TrendingUp className="w-5 h-5 lg:w-6 lg:h-6 text-amber-600" />
+          </div>
+        </div>
+      </div>
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs lg:text-sm text-slate-600 mb-1">Primes ce mois</p>
+            <p className="text-lg lg:text-2xl font-bold text-slate-900">
+              {employees.reduce((sum, emp) => sum + (emp.total_bonuses || 0), 0).toLocaleString()} f CFA
+            </p>
+          </div>
+          <div className="bg-green-100 p-2 rounded-lg">
+            <TrendingUp className="w-5 h-5 lg:w-6 lg:h-6 text-green-600" />
+          </div>
+        </div>
+      </div>
+    </div>
 
-      {/* Historique des paies */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-full">
-            <thead className="bg-slate-50 border-b border-slate-200">
-              <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider min-w-[150px]">
-                  Période
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider hidden md:table-cell">
-                  Nom
-                </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">
-                  Montant
-                </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider hidden lg:table-cell">
-                  Employés
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                  Statut
-                </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider min-w-[100px]">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200">
-              {payrollPeriods.map((period) => {
-                const periodDetails = payrollDetails.filter(detail => detail.payroll_period_id === period.id);
-                return (
-                  <tr key={period.id} className="hover:bg-slate-50 transition">
-                    <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-900">
-                      {new Date(period.start_date).toLocaleDateString('fr-FR')} - {new Date(period.end_date).toLocaleDateString('fr-FR')}
-                    </td>
-                    <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-900 hidden md:table-cell">
-                      {period.period_name}
-                    </td>
-                    <td className="px-4 py-4 whitespace-nowrap text-right text-sm font-medium text-slate-900">
-                      {period.total_amount.toLocaleString()} f CFA
-                    </td>
-                    <td className="px-4 py-4 whitespace-nowrap text-right text-sm font-medium text-slate-900 hidden lg:table-cell">
-                      {period.employee_count}
-                    </td>
-                    <td className="px-4 py-4 whitespace-nowrap">
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        period.status === 'paid' 
-                          ? 'bg-green-100 text-green-800'
-                          : period.status === 'calculated'
-                          ? 'bg-blue-100 text-blue-800'
-                          : 'bg-amber-100 text-amber-800'
-                      }`}>
-                        {period.status === 'paid' ? 'Payé' : 
-                          period.status === 'calculated' ? 'Calculé' : 'Brouillon'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      {period.status !== 'paid' && (
+    {/* Historique des paies - AMÉLIORÉ */}
+    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-full">
+          <thead className="bg-slate-50 border-b border-slate-200">
+            <tr>
+              <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Période</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider hidden md:table-cell">Nom</th>
+              <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">Montant</th>
+              <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider hidden lg:table-cell">Employés</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Statut</th>
+              <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider min-w-[200px]">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-200">
+            {payrollPeriods.map((period) => {
+              const periodDetails = payrollDetails.filter(detail => detail.payroll_period_id === period.id);
+              return (
+                <tr key={period.id} className="hover:bg-slate-50 transition">
+                  <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-900">
+                    {new Date(period.start_date).toLocaleDateString('fr-FR')} - {new Date(period.end_date).toLocaleDateString('fr-FR')}
+                  </td>
+                  <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-900 hidden md:table-cell">
+                    {period.period_name}
+                  </td>
+                  <td className="px-4 py-4 whitespace-nowrap text-right text-sm font-medium text-slate-900">
+                    {period.total_amount.toLocaleString()} f CFA
+                  </td>
+                  <td className="px-4 py-4 whitespace-nowrap text-right text-sm font-medium text-slate-900 hidden lg:table-cell">
+                    {period.employee_count}
+                  </td>
+                  <td className="px-4 py-4 whitespace-nowrap">
+                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                      period.status === 'paid' ? 'bg-green-100 text-green-800' :
+                      period.status === 'calculated' ? 'bg-blue-100 text-blue-800' :
+                      'bg-amber-100 text-amber-800'
+                    }`}>
+                      {period.status === 'paid' ? 'Payé' :
+                       period.status === 'calculated' ? 'Calculé' : 'Brouillon'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-4 whitespace-nowrap text-right text-sm font-medium">
+                    <div className="flex items-center justify-end space-x-2">
+                      {/* Voir les détails */}
+                      <button
+                        onClick={() => loadPayrollPeriodDetails(period.id)}
+                        className="bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700 transition flex items-center"
+                        title="Voir les détails"
+                      >
+                        <Eye className="w-3 h-3 mr-1" />
+                        <span className="hidden sm:inline">Détails</span>
+                      </button>
+                      
+                      {/* Modifier (uniquement si calculated) */}
+                      {period.status === 'calculated' && (
                         <button
                           onClick={() => {
                             setSelectedPeriodForPayment(period.id);
@@ -1879,28 +2167,230 @@ export default function EmployeesView() {
                             });
                             setShowPaymentMethodModal(true);
                           }}
-                          className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 transition"
+                          className="bg-green-600 text-white px-3 py-1 rounded text-xs hover:bg-green-700 transition flex items-center"
+                          title="Marquer comme payé"
                         >
-                          Marquer payé
+                          <CheckCircle className="w-3 h-3 mr-1" />
+                          <span className="hidden sm:inline">Payer</span>
                         </button>
                       )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-        {payrollPeriods.length === 0 && (
-          <div className="text-center py-12">
-            <CreditCard className="w-16 h-16 text-slate-300 mx-auto mb-4" />
-            <p className="text-slate-600">Aucune période de paie enregistrée</p>
-            <p className="text-sm text-slate-500 mt-2">Utilisez le calculateur pour générer les premières fiches de paie</p>
-          </div>
-        )}
+                      
+                      {/* Imprimer tous les bulletins */}
+                      {(period.status === 'paid' || period.status === 'calculated') && (
+                        <button
+                          onClick={() => printAllPaySlips(period.id)}
+                          className="bg-purple-600 text-white px-3 py-1 rounded text-xs hover:bg-purple-700 transition flex items-center"
+                          title="Imprimer tous les bulletins"
+                        >
+                          <Printer className="w-3 h-3 mr-1" />
+                          <span className="hidden sm:inline">Imprimer</span>
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
+      {payrollPeriods.length === 0 && (
+        <div className="text-center py-12">
+          <CreditCard className="w-16 h-16 text-slate-300 mx-auto mb-4" />
+          <p className="text-slate-600">Aucune période de paie enregistrée</p>
+          <p className="text-sm text-slate-500 mt-2">Utilisez le calculateur pour générer les premières fiches de paie</p>
+        </div>
+      )}
     </div>
-  );
+  </div>
+);
+
+// Imprimer TOUS les bulletins d'une période
+const printAllPaySlips = async (periodId: string) => {
+  try {
+    // Charger les détails si pas déjà chargés
+    if (detailedPayrollData.length === 0 || selectedPayrollPeriod?.id !== periodId) {
+      await loadPayrollPeriodDetails(periodId);
+    }
+    
+    if (detailedPayrollData.length === 0) {
+      alert('Aucun détail de paie trouvé');
+      return;
+    }
+    
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert('Veuillez autoriser les pop-ups pour imprimer');
+      return;
+    }
+    
+    let htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>Bulletins de Paie - ${selectedPayrollPeriod?.period_name}</title>
+        <style>
+          @page { size: A4; margin: 15mm; }
+          body { font-family: 'Arial', sans-serif; margin: 0; padding: 0; color: #333; }
+          .page-break { page-break-after: always; }
+          .pay-slip { padding: 20px; max-width: 800px; margin: 0 auto; }
+          .header { display: flex; justify-content: space-between; border-bottom: 3px solid #2c3e50; padding-bottom: 15px; margin-bottom: 20px; }
+          .company-info h1 { margin: 0; font-size: 22px; color: #2c3e50; }
+          .company-info p { margin: 3px 0; font-size: 12px; color: #666; }
+          .slip-title { text-align: right; }
+          .slip-title h2 { margin: 0; font-size: 20px; color: #e74c3c; }
+          .slip-title p { margin: 3px 0; font-size: 11px; color: #666; }
+          .employee-info { background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+          .employee-info .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+          .employee-info .row { display: flex; justify-content: space-between; font-size: 13px; }
+          .employee-info .row .label { color: #666; }
+          .employee-info .row .value { font-weight: bold; color: #2c3e50; }
+          .section { margin-bottom: 20px; }
+          .section-title { background: #34495e; color: white; padding: 8px 12px; font-weight: bold; font-size: 14px; border-radius: 4px; margin-bottom: 10px; }
+          table { width: 100%; border-collapse: collapse; font-size: 13px; }
+          th { background: #ecf0f1; padding: 8px; text-align: left; border: 1px solid #bdc3c7; font-weight: bold; }
+          td { padding: 8px; border: 1px solid #bdc3c7; }
+          .amount { text-align: right; font-weight: bold; }
+          .total-row { background: #f8f9fa; font-weight: bold; }
+          .net-salary { background: #2c3e50; color: white; padding: 15px; border-radius: 8px; margin-top: 20px; }
+          .net-salary .row { display: flex; justify-content: space-between; font-size: 18px; font-weight: bold; }
+          .finance-details { background: #fffde7; border-left: 4px solid #f1c40f; padding: 10px; margin: 10px 0; font-size: 12px; }
+          .finance-details h4 { margin: 0 0 8px 0; color: #f39c12; }
+          .finance-details ul { margin: 5px 0; padding-left: 20px; }
+          .finance-details li { margin: 3px 0; }
+          .signature { margin-top: 40px; display: flex; justify-content: space-between; }
+          .signature-box { width: 45%; text-align: center; }
+          .signature-line { border-top: 1px solid #333; margin-top: 60px; padding-top: 5px; font-size: 12px; }
+          .footer { text-align: center; margin-top: 30px; font-size: 10px; color: #95a5a6; border-top: 1px dashed #bdc3c7; padding-top: 10px; }
+          @media print {
+            .no-print { display: none; }
+            body { background: white; }
+          }
+        </style>
+      </head>
+      <body>
+    `;
+    
+    detailedPayrollData.forEach((detail, index) => {
+      const emp = detail.employees;
+      const empName = emp ? `${emp.first_name} ${emp.last_name}` : 'Employé inconnu';
+      const position = emp?.employee_positions?.name || 'Non spécifié';
+      const department = emp?.employee_departments?.name || 'Non spécifié';
+      
+      htmlContent += `
+        <div class="pay-slip ${index < detailedPayrollData.length - 1 ? 'page-break' : ''}">
+          <div class="header">
+            <div class="company-info">
+              <h1>LA TERRA COTTA OUAGA</h1>
+              <p>Ouagadougou, Burkina Faso</p>
+              <p>Tél: 04 04 34 35</p>
+            </div>
+            <div class="slip-title">
+              <h2>BULLETIN DE PAIE</h2>
+              <p>Période: ${new Date(selectedPayrollPeriod.start_date).toLocaleDateString('fr-FR')} au ${new Date(selectedPayrollPeriod.end_date).toLocaleDateString('fr-FR')}</p>
+              <p>N° Bulletin: BP-${String(index + 1).padStart(3, '0')}/${new Date().getFullYear()}</p>
+            </div>
+          </div>
+          
+          <div class="employee-info">
+            <div class="grid">
+              <div class="row"><span class="label">Nom:</span><span class="value">${empName}</span></div>
+              <div class="row"><span class="label">Matricule:</span><span class="value">${emp?.employee_number || 'N/A'}</span></div>
+              <div class="row"><span class="label">Poste:</span><span class="value">${position}</span></div>
+              <div class="row"><span class="label">Département:</span><span class="value">${department}</span></div>
+              ${emp?.bank_account ? `<div class="row"><span class="label">Compte bancaire:</span><span class="value">${emp.bank_account}</span></div>` : ''}
+            </div>
+          </div>
+          
+          <div class="section">
+            <div class="section-title">RÉMUNÉRATION</div>
+            <table>
+              <tr><td>Salaire de base</td><td class="amount">${detail.base_salary.toLocaleString()} f CFA</td></tr>
+              <tr><td>Heures supplémentaires (${detail.overtime_hours.toFixed(1)}h)</td><td class="amount">${detail.overtime_amount.toLocaleString()} f CFA</td></tr>
+              <tr><td>Primes</td><td class="amount">${detail.bonus_amount.toLocaleString()} f CFA</td></tr>
+              <tr class="total-row"><td><strong>SALAIRE BRUT</strong></td><td class="amount"><strong>${detail.gross_salary.toLocaleString()} f CFA</strong></td></tr>
+            </table>
+          </div>
+          
+          <div class="section">
+            <div class="section-title">DÉDUCTIONS</div>
+            <table>
+              <tr><td>Avances sur salaire</td><td class="amount">-${detail.advance_deductions.toLocaleString()} f CFA</td></tr>
+              <tr><td>Autres déductions</td><td class="amount">-${detail.other_deductions.toLocaleString()} f CFA</td></tr>
+              <tr class="total-row"><td><strong>TOTAL DÉDUCTIONS</strong></td><td class="amount"><strong>-${(detail.advance_deductions + detail.other_deductions).toLocaleString()} f CFA</strong></td></tr>
+            </table>
+          </div>
+          
+          ${(detail.advances?.length > 0 || detail.bonuses?.length > 0 || detail.deductions?.length > 0) && `
+            <div class="finance-details">
+              <h4>📋 DÉTAIL DES OPÉRATIONS FINANCIÈRES</h4>
+              ${detail.advances?.length > 0 ? `
+                <div><strong>💰 Avances (${detail.advances.length}):</strong></div>
+                <ul>
+                  ${detail.advances.map(a => `<li>${new Date(a.advance_date).toLocaleDateString('fr-FR')}: ${a.amount.toLocaleString()} f CFA - ${a.reason || 'Sans motif'}</li>`).join('')}
+                </ul>
+              ` : ''}
+              ${detail.bonuses?.length > 0 ? `
+                <div><strong>🎁 Primes (${detail.bonuses.length}):</strong></div>
+                <ul>
+                  ${detail.bonuses.map(b => `<li>${new Date(b.bonus_date).toLocaleDateString('fr-FR')}: ${b.amount.toLocaleString()} f CFA - ${b.reason || 'Sans motif'} (${b.type || 'autre'})</li>`).join('')}
+                </ul>
+              ` : ''}
+              ${detail.deductions?.length > 0 ? `
+                <div><strong>️ Déductions (${detail.deductions.length}):</strong></div>
+                <ul>
+                  ${detail.deductions.map(d => `<li>${new Date(d.deduction_date).toLocaleDateString('fr-FR')}: ${d.amount.toLocaleString()} f CFA - ${d.reason || 'Sans motif'} (${d.type || 'autre'})</li>`).join('')}
+                </ul>
+              ` : ''}
+            </div>
+          `}
+          
+          <div class="net-salary">
+            <div class="row">
+              <span>SALAIRE NET À PAYER:</span>
+              <span>${detail.net_salary.toLocaleString()} f CFA</span>
+            </div>
+          </div>
+          
+          <div class="signature">
+            <div class="signature-box">
+              <div class="signature-line">Signature de l'employé</div>
+              <div style="font-size: 11px; margin-top: 5px;">${empName}</div>
+            </div>
+            <div class="signature-box">
+              <div class="signature-line">Signature de l'employeur</div>
+              <div style="font-size: 11px; margin-top: 5px;">La Direction</div>
+            </div>
+          </div>
+          
+          <div class="footer">
+            Bulletin généré le ${new Date().toLocaleString('fr-FR')} • 
+            Période de paie: ${selectedPayrollPeriod?.period_name} •
+            Statut: ${detail.status === 'paid' ? 'PAYÉ' : 'EN ATTENTE'}
+          </div>
+        </div>
+      `;
+    });
+    
+    htmlContent += `
+        <script>
+          window.onload = function() {
+            setTimeout(function() { window.print(); }, 500);
+          };
+        </script>
+      </body>
+      </html>
+    `;
+    
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+  } catch (error: any) {
+    console.error('Error printing pay slips:', error);
+    alert(`Erreur: ${error.message}`);
+  }
+};
+
 
   // Composant pour l'onglet Congés
   const renderLeavesTab = () => (
@@ -2805,13 +3295,17 @@ export default function EmployeesView() {
                             )}
                           </div>
                           
-                          <button 
-                            onClick={() => handleDeleteEmployee(employee.id)}
-                            className="text-red-600 hover:text-red-900 transition p-1"
-                            title="Supprimer"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          <button
+  onClick={() => handleDeleteEmployee(employee.id, employee.status)}
+  className={`transition p-1 rounded ${
+    employee.status === 'inactive'
+      ? 'text-red-700 hover:bg-red-100 font-bold' // Plus visible pour la suppression définitive
+      : 'text-red-600 hover:text-red-900'
+  }`}
+  title={employee.status === 'inactive' ? 'Supprimer définitivement' : 'Désactiver l\'employé'}
+>
+  <Trash2 className="w-4 h-4" />
+</button>
                           <button 
                             onClick={() => handleCheckIn(employee.id)}
                             className="bg-green-600 text-white px-2 py-1 rounded text-xs hover:bg-green-700 transition hidden sm:inline-block"
@@ -3420,6 +3914,330 @@ export default function EmployeesView() {
           </div>
         </div>
       )}
+
+      {/* Modal des détails de paie */}
+{showPayrollDetails && selectedPayrollPeriod && (
+  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+    <div className="bg-white rounded-xl shadow-xl max-w-7xl w-full max-h-[90vh] overflow-y-auto">
+      <div className="flex items-center justify-between p-6 border-b border-slate-200 sticky top-0 bg-white z-10">
+        <div>
+          <h3 className="text-xl font-bold text-slate-900">
+            Détails de la Paie - {selectedPayrollPeriod.period_name}
+          </h3>
+          <p className="text-sm text-slate-600 mt-1">
+            {new Date(selectedPayrollPeriod.start_date).toLocaleDateString('fr-FR')} au {new Date(selectedPayrollPeriod.end_date).toLocaleDateString('fr-FR')}
+            <span className={`ml-2 px-2 py-0.5 rounded-full text-xs font-medium ${
+              selectedPayrollPeriod.status === 'paid' ? 'bg-green-100 text-green-800' :
+              selectedPayrollPeriod.status === 'calculated' ? 'bg-blue-100 text-blue-800' :
+              'bg-amber-100 text-amber-800'
+            }`}>
+              {selectedPayrollPeriod.status === 'paid' ? 'PAYÉ' :
+               selectedPayrollPeriod.status === 'calculated' ? 'CALCULÉ' : 'BROUILLON'}
+            </span>
+          </p>
+        </div>
+        <div className="flex items-center space-x-3">
+          <button
+            onClick={() => printAllPaySlips(selectedPayrollPeriod.id)}
+            className="bg-purple-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-purple-700 transition flex items-center"
+          >
+            <Printer className="w-4 h-4 mr-2" />
+            Imprimer tous les bulletins
+          </button>
+          <button
+            onClick={() => setShowPayrollDetails(false)}
+            className="text-slate-400 hover:text-slate-600 transition"
+          >
+            <X className="w-6 h-6" />
+          </button>
+        </div>
+      </div>
+      
+      <div className="p-6">
+        {loadingDetails ? (
+          <div className="text-center py-12">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+            <p className="mt-4 text-slate-600">Chargement des détails...</p>
+          </div>
+        ) : (
+          <>
+            {/* Résumé global */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <p className="text-sm text-blue-700">Total Brut</p>
+                <p className="text-xl font-bold text-blue-900">
+                  {detailedPayrollData.reduce((sum, d) => sum + (d.gross_salary || 0), 0).toLocaleString()} f CFA
+                </p>
+              </div>
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                <p className="text-sm text-red-700">Total Déductions</p>
+                <p className="text-xl font-bold text-red-900">
+                  {detailedPayrollData.reduce((sum, d) => sum + (d.advance_deductions || 0) + (d.other_deductions || 0), 0).toLocaleString()} f CFA
+                </p>
+              </div>
+              <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                <p className="text-sm text-green-700">Total Net</p>
+                <p className="text-xl font-bold text-green-900">
+                  {detailedPayrollData.reduce((sum, d) => sum + (d.net_salary || 0), 0).toLocaleString()} f CFA
+                </p>
+              </div>
+              <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                <p className="text-sm text-purple-700">Nombre d'employés</p>
+                <p className="text-xl font-bold text-purple-900">
+                  {detailedPayrollData.length}
+                </p>
+              </div>
+            </div>
+            
+            {/* Tableau des employés */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Employé</th>
+                    <th className="px-3 py-2 text-right">Base</th>
+                    <th className="px-3 py-2 text-right hidden lg:table-cell">H. Sup</th>
+                    <th className="px-3 py-2 text-right hidden md:table-cell">Primes</th>
+                    <th className="px-3 py-2 text-right hidden lg:table-cell">Avances</th>
+                    <th className="px-3 py-2 text-right hidden md:table-cell">Déduct.</th>
+                    <th className="px-3 py-2 text-right">Brut</th>
+                    <th className="px-3 py-2 text-right">Net</th>
+                    <th className="px-3 py-2 text-center">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {detailedPayrollData.map((detail, index) => {
+                    const emp = detail.employees;
+                    const empName = emp ? `${emp.first_name} ${emp.last_name}` : 'Inconnu';
+                    const hasFinance = (detail.advances?.length > 0 || detail.bonuses?.length > 0 || detail.deductions?.length > 0);
+                    return (
+                      <tr key={index} className="hover:bg-slate-50">
+                        <td className="px-3 py-3">
+                          <div className="font-medium text-slate-900">{empName}</div>
+                          <div className="text-xs text-slate-500">{emp?.employee_number} • {emp?.employee_positions?.name}</div>
+                          {hasFinance && (
+                            <div className="flex space-x-1 mt-1">
+                              {detail.advances?.length > 0 && <span className="text-xs bg-amber-100 text-amber-800 px-1 rounded">{detail.advances.length} avance(s)</span>}
+                              {detail.bonuses?.length > 0 && <span className="text-xs bg-green-100 text-green-800 px-1 rounded">{detail.bonuses.length} prime(s)</span>}
+                              {detail.deductions?.length > 0 && <span className="text-xs bg-red-100 text-red-800 px-1 rounded">{detail.deductions.length} déduct.</span>}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-3 py-3 text-right">{detail.base_salary.toLocaleString()}</td>
+                        <td className="px-3 py-3 text-right hidden lg:table-cell">{detail.overtime_hours.toFixed(1)}h</td>
+                        <td className="px-3 py-3 text-right hidden md:table-cell text-green-600">+{detail.bonus_amount.toLocaleString()}</td>
+                        <td className="px-3 py-3 text-right hidden lg:table-cell text-amber-600">-{detail.advance_deductions.toLocaleString()}</td>
+                        <td className="px-3 py-3 text-right hidden md:table-cell text-red-600">-{detail.other_deductions.toLocaleString()}</td>
+                        <td className="px-3 py-3 text-right font-medium">{detail.gross_salary.toLocaleString()}</td>
+                        <td className="px-3 py-3 text-right font-bold text-green-600">{detail.net_salary.toLocaleString()}</td>
+                        <td className="px-3 py-3 text-center">
+                          <div className="flex items-center justify-center space-x-1">
+                            <button
+                              onClick={() => printSinglePaySlip(detail)}
+                              className="text-purple-600 hover:text-purple-900 p-1"
+                              title="Imprimer bulletin"
+                            >
+                              <Printer className="w-4 h-4" />
+                            </button>
+                            {selectedPayrollPeriod.status === 'calculated' && (
+                              <button
+                                onClick={() => handleEditPayrollDetail(detail)}
+                                className="text-blue-600 hover:text-blue-900 p-1"
+                                title="Modifier"
+                              >
+                                <Edit className="w-4 h-4" />
+                              </button>
+                            )}
+                            <button
+                              onClick={() => {
+                                // Afficher les détails financiers dans une alerte
+                                let msg = `Détails pour ${empName}:\n\n`;
+                                if (detail.advances?.length > 0) {
+                                  msg += '💰 AVANCES:\n';
+                                  detail.advances.forEach(a => {
+                                    msg += `  - ${new Date(a.advance_date).toLocaleDateString('fr-FR')}: ${a.amount.toLocaleString()} f CFA (${a.reason || 'N/A'})\n`;
+                                  });
+                                }
+                                if (detail.bonuses?.length > 0) {
+                                  msg += '\n🎁 PRIMES:\n';
+                                  detail.bonuses.forEach(b => {
+                                    msg += `  - ${new Date(b.bonus_date).toLocaleDateString('fr-FR')}: ${b.amount.toLocaleString()} f CFA (${b.reason || 'N/A'})\n`;
+                                  });
+                                }
+                                if (detail.deductions?.length > 0) {
+                                  msg += '\n⚠️ DÉDUCTIONS:\n';
+                                  detail.deductions.forEach(d => {
+                                    msg += `  - ${new Date(d.deduction_date).toLocaleDateString('fr-FR')}: ${d.amount.toLocaleString()} f CFA (${d.reason || 'N/A'})\n`;
+                                  });
+                                }
+                                if (!hasFinance) msg += 'Aucune opération financière pour cette période.';
+                                alert(msg);
+                              }}
+                              className="text-slate-600 hover:text-slate-900 p-1"
+                              title="Voir détails financiers"
+                            >
+                              <Eye className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot className="bg-slate-100 font-bold">
+                  <tr>
+                    <td className="px-3 py-3">TOTAL</td>
+                    <td className="px-3 py-3 text-right">{detailedPayrollData.reduce((s, d) => s + d.base_salary, 0).toLocaleString()}</td>
+                    <td className="px-3 py-3 text-right hidden lg:table-cell">{detailedPayrollData.reduce((s, d) => s + d.overtime_hours, 0).toFixed(1)}h</td>
+                    <td className="px-3 py-3 text-right hidden md:table-cell text-green-600">+{detailedPayrollData.reduce((s, d) => s + d.bonus_amount, 0).toLocaleString()}</td>
+                    <td className="px-3 py-3 text-right hidden lg:table-cell text-amber-600">-{detailedPayrollData.reduce((s, d) => s + d.advance_deductions, 0).toLocaleString()}</td>
+                    <td className="px-3 py-3 text-right hidden md:table-cell text-red-600">-{detailedPayrollData.reduce((s, d) => s + d.other_deductions, 0).toLocaleString()}</td>
+                    <td className="px-3 py-3 text-right">{detailedPayrollData.reduce((s, d) => s + d.gross_salary, 0).toLocaleString()}</td>
+                    <td className="px-3 py-3 text-right text-green-600">{detailedPayrollData.reduce((s, d) => s + d.net_salary, 0).toLocaleString()}</td>
+                    <td></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  </div>
+)}
+
+{/* Modal de modification d'un détail de paie */}
+{showEditPayroll && editingPayrollDetail && (
+  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[60]">
+    <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+      <div className="flex items-center justify-between p-6 border-b border-slate-200">
+        <h3 className="text-xl font-bold text-slate-900">
+          Modifier la Paie - {editingPayrollDetail.employees?.first_name} {editingPayrollDetail.employees?.last_name}
+        </h3>
+        <button
+          onClick={() => setShowEditPayroll(false)}
+          className="text-slate-400 hover:text-slate-600"
+        >
+          <X className="w-6 h-6" />
+        </button>
+      </div>
+      <div className="p-6 space-y-4">
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800">
+          ℹ️ Les modifications seront recalculées automatiquement (salaire brut et net).
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Salaire de base (f CFA)</label>
+            <input
+              type="number"
+              value={editFormData.base_salary}
+              onChange={(e) => setEditFormData({...editFormData, base_salary: parseFloat(e.target.value) || 0})}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Heures supplémentaires</label>
+            <input
+              type="number"
+              step="0.5"
+              value={editFormData.overtime_hours}
+              onChange={(e) => setEditFormData({...editFormData, overtime_hours: parseFloat(e.target.value) || 0})}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Primes (f CFA)</label>
+            <input
+              type="number"
+              value={editFormData.bonus_amount}
+              onChange={(e) => setEditFormData({...editFormData, bonus_amount: parseFloat(e.target.value) || 0})}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Avances (f CFA)</label>
+            <input
+              type="number"
+              value={editFormData.advance_deductions}
+              onChange={(e) => setEditFormData({...editFormData, advance_deductions: parseFloat(e.target.value) || 0})}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Autres déductions (f CFA)</label>
+            <input
+              type="number"
+              value={editFormData.other_deductions}
+              onChange={(e) => setEditFormData({...editFormData, other_deductions: parseFloat(e.target.value) || 0})}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Notes</label>
+            <input
+              type="text"
+              value={editFormData.notes}
+              onChange={(e) => setEditFormData({...editFormData, notes: e.target.value})}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500"
+              placeholder="Notes optionnelles..."
+            />
+          </div>
+        </div>
+        
+        {/* Aperçu du calcul */}
+        <div className="bg-slate-50 rounded-lg p-4">
+          <h4 className="font-semibold text-slate-900 mb-3">Aperçu du calcul</h4>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span>Salaire de base:</span>
+              <span>{editFormData.base_salary.toLocaleString()} f CFA</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Heures sup. ({editFormData.overtime_hours}h × {(editFormData.base_salary / 173 * 1.25).toFixed(0)} f):</span>
+              <span className="text-green-600">+{(editFormData.overtime_hours * editFormData.base_salary / 173 * 1.25).toLocaleString(undefined, {maximumFractionDigits: 0})} f CFA</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Primes:</span>
+              <span className="text-green-600">+{editFormData.bonus_amount.toLocaleString()} f CFA</span>
+            </div>
+            <div className="flex justify-between font-bold border-t pt-2">
+              <span>Salaire Brut:</span>
+              <span>{(editFormData.base_salary + editFormData.overtime_hours * editFormData.base_salary / 173 * 1.25 + editFormData.bonus_amount).toLocaleString(undefined, {maximumFractionDigits: 0})} f CFA</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Avances:</span>
+              <span className="text-red-600">-{editFormData.advance_deductions.toLocaleString()} f CFA</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Autres déductions:</span>
+              <span className="text-red-600">-{editFormData.other_deductions.toLocaleString()} f CFA</span>
+            </div>
+            <div className="flex justify-between font-bold text-lg border-t pt-2 text-green-600">
+              <span>Salaire Net:</span>
+              <span>{Math.max(0, editFormData.base_salary + editFormData.overtime_hours * editFormData.base_salary / 173 * 1.25 + editFormData.bonus_amount - editFormData.advance_deductions - editFormData.other_deductions).toLocaleString(undefined, {maximumFractionDigits: 0})} f CFA</span>
+            </div>
+          </div>
+        </div>
+        
+        <div className="flex space-x-3 pt-4">
+          <button
+            onClick={() => setShowEditPayroll(false)}
+            className="flex-1 px-6 py-3 border border-slate-300 rounded-lg font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Annuler
+          </button>
+          <button
+            onClick={handleSavePayrollEdit}
+            className="flex-1 px-6 py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 flex items-center justify-center"
+          >
+            <Save className="w-4 h-4 mr-2" />
+            Enregistrer les modifications
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+)}
     </div>
   );
 }

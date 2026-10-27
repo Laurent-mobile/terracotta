@@ -128,20 +128,27 @@ export default function PayrollView() {
     return 0;
   };
 
+  // 🔥 FONCTION CORRIGÉE
   const loadPayrollDetails = async (periodId: string) => {
     try {
       const { data, error } = await supabase
         .from('salary_payments')
         .select(`
           *,
-          employees(first_name, last_name, employee_number)
+          employees:employee_id(first_name, last_name, employee_number)
         `)
         .eq('period_id', periodId);
 
-      if (error) throw error;
+      if (error) {
+        console.error('❌ Erreur chargement détails:', error);
+        throw error;
+      }
+      
+      console.log('✅ Détails chargés:', data?.length, 'employés');
       setPayrollDetails(data || []);
     } catch (error) {
-      console.error('Error loading payroll details:', error);
+      console.error(' Error loading payroll details:', error);
+      alert(`Erreur: ${error instanceof Error ? error.message : 'Erreur inconnue'}`);
     }
   };
 
@@ -250,9 +257,9 @@ export default function PayrollView() {
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div>
                       <div className="font-medium text-slate-900">
-                        {payment.employees.first_name} {payment.employees.last_name}
+                        {payment.employees?.first_name || 'N/A'} {payment.employees?.last_name || ''}
                       </div>
-                      <div className="text-sm text-slate-500">{payment.employees.employee_number}</div>
+                      <div className="text-sm text-slate-500">{payment.employees?.employee_number || ''}</div>
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium text-slate-900">

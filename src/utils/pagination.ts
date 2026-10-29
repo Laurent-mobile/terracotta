@@ -24,7 +24,7 @@ export async function fetchAllPaginated(
 
     let query = supabase
       .from(table)
-      .select('*', { count: 'est' })
+      .select('*', { count: 'exact' }) // Changed from 'est' to 'exact'
       .range(from, to);
 
     query = filter(query);
@@ -39,8 +39,15 @@ export async function fetchAllPaginated(
       allData = allData.concat(data);
     }
 
-    hasMore = data && data.length === pageSize;
+    // Continue if we got a full page OR if we haven't reached the total count
+    hasMore = data && data.length === pageSize && allData.length < (count || 0);
     page++;
+    
+    // Safety limit to prevent infinite loops
+    if (page > 100) {
+      console.warn('Reached maximum pagination limit (100 pages)');
+      break;
+    }
   }
 
   return allData;

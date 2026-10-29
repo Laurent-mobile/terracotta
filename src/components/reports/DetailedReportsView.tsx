@@ -11,6 +11,13 @@ import {
 import { useAuth } from '../../contexts/AuthContext';
 import KitchenBarReportsView from './KitchenBarReportsView';
 import { PDFGenerator } from '../../utils/pdfGenerator';
+import {
+  fetchAllOrders,
+  fetchAllOrderItems,
+  fetchAllExpenses,
+  fetchAllPayments,
+  fetchAllSupplierPayments
+} from '../../utils/pagination';
 
 interface ReportData {
   period: string;
@@ -129,43 +136,75 @@ export default function DetailedReportsView() {
 
   const minuteOptions = ['00', '15', '30', '45'];
 
-  const loadReportData = async () => {
+        const loadReportData = async () => {
     try {
       setLoading(true);
       console.log('🔍 Chargement des données pour la période:', dateRange);
-
       const startDateTime = `${dateRange.startDate}T${timeRange.startHour}:${timeRange.startMinute}:00`;
       const endDateTime = `${dateRange.endDate}T${timeRange.endHour}:${timeRange.endMinute}:59`;
 
+      // 🔥 FONCTION DE PAGINATION POUR CONTOURNER LA LIMITE DE 1000 ENREGISTREMENTS
+      const fetchAllData = async (table: string, queryFn: (q: any) => any) => {
+        let allData: any[] = [];
+        let page = 0;
+        const pageSize = 1000;
+        let hasMore = true;
+
+        while (hasMore) {
+          const from = page * pageSize;
+          const to = from + pageSize - 1;
+          
+          // On ajoute .range() et count: 'exact' pour gérer la pagination
+          const query = queryFn(supabase.from(table).select('*', { count: 'exact' }).range(from, to));
+          const { data, error, count } = await query;
+
+          if (error) {
+            console.error(`❌ Erreur chargement ${table}:`, error);
+            throw error;
+          }
+
+          if (data) {
+            allData = allData.concat(data);
+          }
+
+          // Continuer si on a reçu une page complète ET qu'on n'a pas encore atteint le total
+          hasMore = data && data.length === pageSize && allData.length < (count || 0);
+          page++;
+          
+          if (page > 50) { // Limite de sécurité pour éviter les boucles infinies en cas de bug
+            console.warn('⚠️ Atteinte de la limite de sécurité de pagination (50 pages)');
+            break;
+          }
+        }
+        return allData;
+      };
+
       const [
-        salesData,
-        expensesData,
-        supplierOrdersData,
-        supplierPaymentsData,
-        inventoryData
+        salesRaw,
+        allExpenses,
+        supplierOrders,
+        supplierPayments,
+        inventoryTransactions
       ] = await Promise.all([
-        supabase
-          .from('pos_orders')
-          .select(`
+        fetchAllData('pos_orders', (q) => 
+          q.select(`
             *,
             pos_order_items(*)
           `)
           .gte('created_at', startDateTime)
           .lte('created_at', endDateTime)
-          .eq('status', 'paid'),
-
-        supabase
-          .from('expenses')
-          .select(`
+          .eq('status', 'paid')
+        ),
+        fetchAllData('expenses', (q) => 
+          q.select(`
             *,
             expense_categories(name, category_type)
           `)
           .gte('expense_date', dateRange.startDate)
-          .lte('expense_date', dateRange.endDate),
-
-        supabase
-          .from('supplier_orders')
-          .select(`
+          .lte('expense_date', dateRange.endDate)
+        ),
+        fetchAllData('supplier_orders', (q) => 
+          q.select(`
             *,
             suppliers(name),
             supplier_order_payments(amount, payment_method, payment_date, reference_number),
@@ -180,11 +219,10 @@ export default function DetailedReportsView() {
             )
           `)
           .gte('order_date', dateRange.startDate)
-          .lte('order_date', dateRange.endDate),
-
-        supabase
-          .from('supplier_order_payments')
-          .select(`
+          .lte('order_date', dateRange.endDate)
+        ),
+        fetchAllData('supplier_order_payments', (q) => 
+          q.select(`
             *,
             supplier_orders(
               order_number,
@@ -193,32 +231,22 @@ export default function DetailedReportsView() {
             )
           `)
           .gte('payment_date', dateRange.startDate)
-          .lte('payment_date', dateRange.endDate),
-
-        supabase
-          .from('inventory_transactions')
-          .select('*')
+          .lte('payment_date', dateRange.endDate)
+        ),
+        fetchAllData('inventory_transactions', (q) => 
+          q.select('*')
           .gte('created_at', startDateTime)
           .lte('created_at', endDateTime)
+        )
       ]);
 
-      if (salesData.error) console.error('❌ Erreur chargement ventes:', salesData.error);
-      if (expensesData.error) console.error('❌ Erreur chargement dépenses:', expensesData.error);
-      if (supplierOrdersData.error) console.error('❌ Erreur chargement commandes fournisseurs:', supplierOrdersData.error);
-      if (supplierPaymentsData.error) console.error('❌ Erreur chargement paiements fournisseurs:', supplierPaymentsData.error);
-      if (inventoryData.error) console.error('❌ Erreur chargement inventaire:', inventoryData.error);
-
-      const sales = (salesData.data || []).map(order => ({
+      // Formatage des ventes pour s'assurer que les articles sont bien un tableau
+      const sales = salesRaw.map((order: any) => ({
         ...order,
         items: order.pos_order_items || []
-      })) as OrderWithItems[];
+      }));
 
-      const allExpenses = expensesData.data || [];
-      const supplierOrders = supplierOrdersData.data || [];
-      const supplierPayments = supplierPaymentsData.data || [];
-      const inventoryTransactions = inventoryData.data || [];
-
-      console.log('📊 Données récupérées:', {
+      console.log('📊 Données récupérées (après pagination):', {
         ventes: sales.length,
         dépenses: allExpenses.length,
         commandesFournisseurs: supplierOrders.length,
@@ -231,41 +259,34 @@ export default function DetailedReportsView() {
         expense.expense_type !== 'supplier_order' &&
         !expense.reference_type?.includes('supplier')
       );
-
+      
       const fixedExpenses = allExpenses.filter((expense: any) =>
         expense.expense_category_type === 'fixed' &&
         expense.expense_type !== 'supplier_order' &&
         !expense.reference_type?.includes('supplier')
       );
 
-      const totalSales = sales.reduce((sum, sale) => sum + (sale.total_amount || 0), 0);
-      const totalCurrentExpenses = currentExpenses.reduce((sum, expense) => sum + (expense.amount || 0), 0);
-      const totalFixedExpenses = fixedExpenses.reduce((sum, expense) => sum + (expense.amount || 0), 0);
-
-      const totalSupplierPayments = supplierPayments.reduce((sum, payment) => sum + (payment.amount || 0), 0);
-
+      const totalSales = sales.reduce((sum: any, sale: any) => sum + (sale.total_amount || 0), 0);
+      const totalCurrentExpenses = currentExpenses.reduce((sum: any, expense: any) => sum + (expense.amount || 0), 0);
+      const totalFixedExpenses = fixedExpenses.reduce((sum: any, expense: any) => sum + (expense.amount || 0), 0);
+      const totalSupplierPayments = supplierPayments.reduce((sum: any, payment: any) => sum + (payment.amount || 0), 0);
+      
       const totalExpenses = totalFixedExpenses + totalSupplierPayments + totalCurrentExpenses;
+      
+      const totalSupplierOrders = supplierOrders.reduce((sum: any, order: any) => sum + (order.total_amount || 0), 0);
+      
+      const paidSupplierOrders = supplierOrders.filter((order: any) => order.payment_status === 'paid');
+      const partiallyPaidSupplierOrders = supplierOrders.filter((order: any) => order.payment_status === 'partial');
+      const unpaidSupplierOrders = supplierOrders.filter((order: any) => order.payment_status === 'pending' || !order.payment_status);
 
-      const totalSupplierOrders = supplierOrders.reduce((sum, order) => sum + (order.total_amount || 0), 0);
-
-      const paidSupplierOrders = supplierOrders.filter((order: any) =>
-        order.payment_status === 'paid'
-      );
-      const partiallyPaidSupplierOrders = supplierOrders.filter((order: any) =>
-        order.payment_status === 'partial'
-      );
-      const unpaidSupplierOrders = supplierOrders.filter((order: any) =>
-        order.payment_status === 'pending' || !order.payment_status
-      );
-
-      const totalPaidSupplierOrders = paidSupplierOrders.reduce((sum, order) => sum + (order.total_amount || 0), 0);
-      const totalPartiallyPaidSupplierOrders = partiallyPaidSupplierOrders.reduce((sum, order) => sum + (order.total_amount || 0), 0);
-      const totalUnpaidSupplierOrders = unpaidSupplierOrders.reduce((sum, order) => sum + (order.total_amount || 0), 0);
+      const totalPaidSupplierOrders = paidSupplierOrders.reduce((sum: any, order: any) => sum + (order.total_amount || 0), 0);
+      const totalPartiallyPaidSupplierOrders = partiallyPaidSupplierOrders.reduce((sum: any, order: any) => sum + (order.total_amount || 0), 0);
+      const totalUnpaidSupplierOrders = unpaidSupplierOrders.reduce((sum: any, order: any) => sum + (order.total_amount || 0), 0);
 
       const netProfit = totalSales - totalExpenses;
       const profitMargin = totalSales > 0 ? (netProfit / totalSales) * 100 : 0;
 
-      const reportData: ReportData = {
+      const reportDataObj = {
         period: `${new Date(dateRange.startDate).toLocaleDateString('fr-FR')} ${timeRange.startHour}:${timeRange.startMinute} - ${new Date(dateRange.endDate).toLocaleDateString('fr-FR')} ${timeRange.endHour}:${timeRange.endMinute}`,
         totalSales,
         totalExpenses,
@@ -288,17 +309,16 @@ export default function DetailedReportsView() {
       };
 
       console.log('📈 Statistiques calculées:', {
-        totalSales: `${reportData.totalSales.toLocaleString()} f CFA`,
-        totalCurrentExpenses: `${reportData.totalCurrentExpenses.toLocaleString()} f CFA (hors paiements fournisseurs)`,
-        totalFixedExpenses: `${reportData.totalFixedExpenses.toLocaleString()} f CFA`,
-        totalSupplierPayments: `${reportData.totalSupplierPayments.toLocaleString()} f CFA (paiements directs)`,
-        totalExpenses: `${reportData.totalExpenses.toLocaleString()} f CFA (fixes + paiements fournisseurs + courantes)`,
-        totalSupplierOrders: `${reportData.totalSupplierOrders.toLocaleString()} f CFA`,
-        netProfit: `${reportData.netProfit.toLocaleString()} f CFA`,
-        profitMargin: `${reportData.profitMargin.toFixed(2)}%`
+        totalSales: `${reportDataObj.totalSales.toLocaleString()} f CFA`,
+        totalCurrentExpenses: `${reportDataObj.totalCurrentExpenses.toLocaleString()} f CFA`,
+        totalFixedExpenses: `${reportDataObj.totalFixedExpenses.toLocaleString()} f CFA`,
+        totalSupplierPayments: `${reportDataObj.totalSupplierPayments.toLocaleString()} f CFA`,
+        totalExpenses: `${reportDataObj.totalExpenses.toLocaleString()} f CFA`,
+        netProfit: `${reportDataObj.netProfit.toLocaleString()} f CFA`,
+        profitMargin: `${reportDataObj.profitMargin.toFixed(2)}%`
       });
 
-      setReportData(reportData);
+      setReportData(reportDataObj);
       setDetailedData({
         sales,
         expenses: allExpenses,

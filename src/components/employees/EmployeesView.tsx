@@ -153,7 +153,7 @@ export default function EmployeesView() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'list' | 'attendance' | 'payroll' | 'leaves'>('list');
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('active');
   const [departmentFilter, setDepartmentFilter] = useState('all');
   const [departments, setDepartments] = useState<any[]>([]);
   const [positions, setPositions] = useState<any[]>([]);

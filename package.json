@@ -4,7 +4,8 @@
   "description": "Application web pour la gestion du restaurant",
   "type": "module",
   "scripts": {
-    "dev": "vite ",
+    "dev": "vite",
+    "dev:mobile": "vite --config vite.config.mobile.ts --host", 
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint .",

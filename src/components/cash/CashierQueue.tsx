@@ -333,24 +333,35 @@ export default function CashierQueue() {
     }
   };
 
-  const loadCashRegister = async () => {
-    try {
-      setRegisterLoading(true);
-      const { data, error } = await supabase
-        .from('cash_register')
-        .select('*')
-        .eq('status', 'open')
-        .maybeSingle();
+const loadCashRegister = async () => {
+  try {
+    setRegisterLoading(true);
+    
+    // 🔥 CORRECTION : Utiliser .order().limit(1).maybeSingle() 
+    // pour éviter l'erreur s'il y a accidentellement plusieurs caisses ouvertes en base.
+    const { data, error } = await supabase
+      .from('cash_register') // ⚠️ VÉRIFIEZ : Si votre table s'appelle "cash_registers" (avec un 's'), modifiez cette ligne !
+      .select('*')
+      .eq('status', 'open')
+      .order('opened_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-      if (error) throw error;
-      setCashRegister(data);
-    } catch (error) {
-      console.error('Error loading cash register:', error);
-      setCashRegister(null);
-    } finally {
-      setRegisterLoading(false);
+    if (error) {
+      console.error('❌ Erreur détaillée chargement caisse:', error);
+      throw error;
     }
-  };
+    
+    console.log('✅ Caisse chargée avec succès:', data);
+    setCashRegister(data);
+  } catch (error: any) {
+    console.error('❌ Error loading cash register:', error);
+    // En cas d'erreur, on met null pour forcer l'affichage de l'écran "Ouvrir la caisse"
+    setCashRegister(null);
+  } finally {
+    setRegisterLoading(false);
+  }
+};
 
   const loadExpenseCategories = useCallback(async () => {
     try {

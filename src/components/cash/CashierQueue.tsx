@@ -336,11 +336,11 @@ export default function CashierQueue() {
 const loadCashRegister = async () => {
   try {
     setRegisterLoading(true);
+    console.log('🔍 Chargement de la caisse...');
     
-    // 🔥 CORRECTION : Utiliser .order().limit(1).maybeSingle() 
-    // pour éviter l'erreur s'il y a accidentellement plusieurs caisses ouvertes en base.
+    // 🔥 CORRECTION : Utiliser .limit(1).maybeSingle() pour éviter l'erreur "multiple rows"
     const { data, error } = await supabase
-      .from('cash_register') // ⚠️ VÉRIFIEZ : Si votre table s'appelle "cash_registers" (avec un 's'), modifiez cette ligne !
+      .from('cash_register')
       .select('*')
       .eq('status', 'open')
       .order('opened_at', { ascending: false })
@@ -348,15 +348,14 @@ const loadCashRegister = async () => {
       .maybeSingle();
 
     if (error) {
-      console.error('❌ Erreur détaillée chargement caisse:', error);
+      console.error('❌ Erreur chargement caisse:', error);
       throw error;
     }
     
-    console.log('✅ Caisse chargée avec succès:', data);
+    console.log('✅ Caisse chargée:', data ? `ID=${data.id}` : 'Aucune caisse ouverte');
     setCashRegister(data);
   } catch (error: any) {
-    console.error('❌ Error loading cash register:', error);
-    // En cas d'erreur, on met null pour forcer l'affichage de l'écran "Ouvrir la caisse"
+    console.error('💥 Erreur critique chargement caisse:', error);
     setCashRegister(null);
   } finally {
     setRegisterLoading(false);
@@ -1124,38 +1123,58 @@ const loadEmployees = useCallback(async () => {
     }
   };
 
-  const handleOpenRegister = async () => {
-    if (!user) {
-      alert('Vous devez être connecté pour ouvrir la caisse');
-      return;
-    }
-
-    const balance = parseFloat(openingBalance) || 0;
-    if (balance < 0) {
-      alert('Le solde d\'ouverture ne peut pas être négatif');
-      return;
-    }
-
-    try {
-      const { error } = await supabase
+const handleOpenRegister = async () => {
+  if (!user) {
+    alert('Vous devez être connecté pour ouvrir la caisse');
+    return;
+  }
+  
+  const balance = parseFloat(openingBalance) || 0;
+  if (balance < 0) {
+    alert('Le solde d\'ouverture ne peut pas être négatif');
+    return;
+  }
+  
+  try {
+    // 🔥 NOUVEAU : Fermer toute caisse open existante avant d'ouvrir
+    const { data: existingOpen } = await supabase
+      .from('cash_register')
+      .select('id')
+      .eq('status', 'open');
+    
+    if (existingOpen && existingOpen.length > 0) {
+      console.warn(`⚠️ ${existingOpen.length} caisse(s) open détectée(s) - fermeture automatique`);
+      await supabase
         .from('cash_register')
-        .insert({
-          opening_balance: balance,
-          opened_by: user.id,
-          status: 'open'
-        });
-
-      if (error) throw error;
-
-      setOpeningBalance('0');
-      setShowOpenForm(false);
-      await loadCashRegister();
-      alert('Caisse ouverte avec succès!');
-    } catch (error: any) {
-      console.error('Error opening register:', error);
-      alert(`Erreur lors de l'ouverture: ${error.message}`);
+        .update({ 
+          status: 'closed', 
+          closed_at: new Date().toISOString(),
+          notes: 'Fermée auto (nouvelle ouverture)'
+        })
+        .in('id', existingOpen.map(c => c.id));
     }
-  };
+    
+    // Ouvrir la nouvelle caisse
+    const { error } = await supabase
+      .from('cash_register')
+      .insert({
+        opening_balance: balance,
+        opened_by: user.id,
+        status: 'open'
+      });
+    
+    if (error) throw error;
+    
+    setOpeningBalance('0');
+    setShowOpenForm(false);
+    await loadCashRegister();
+    alert('✅ Caisse ouverte avec succès!');
+    
+  } catch (error: any) {
+    console.error('Error opening register:', error);
+    alert(`Erreur: ${error.message}`);
+  }
+};
 
   const loadOpenedByUser = async (register: any) => {
     if (register.opened_by) {
@@ -1173,255 +1192,209 @@ const loadEmployees = useCallback(async () => {
   };
 
   const handleCloseRegister = async () => {
-    if (!user || !cashRegister) {
-      alert('Erreur: Utilisateur non connecté ou caisse non trouvée');
-      return;
+  if (!user || !cashRegister) {
+    alert('Erreur: Utilisateur non connecté ou caisse non trouvée');
+    return;
+  }
+  
+  const balance = parseFloat(closingBalance) || 0;
+  if (balance < 0) {
+    alert('Erreur: Le solde de fermeture ne peut pas être négatif');
+    return;
+  }
+  
+  if (!confirm(`Êtes-vous définitivement sûr de vouloir fermer la caisse ?
+Solde de fermeture: ${balance.toLocaleString()} f CFA
+Cette action est irréversible.`)) {
+    return;
+  }
+  
+  setIsProcessing(true);
+  
+  try {
+    console.log('=== 🔄 DÉBUT FERMETURE CAISSE ===');
+    console.log('📋 ID caisse à fermer:', cashRegister.id);
+    
+    // 1. Charger l'utilisateur qui a ouvert
+    let openedByUser = null;
+    if (cashRegister.opened_by) {
+      const userData = await loadOpenedByUser(cashRegister);
+      openedByUser = userData;
     }
-
-    const balance = parseFloat(closingBalance) || 0;
-    if (balance < 0) {
-      alert('Erreur: Le solde de fermeture ne peut pas être négatif');
-      return;
-    }
-
-    if (!confirm(`Êtes-vous définitivement sûr de vouloir fermer la caisse ?\n\nSolde de fermeture: ${balance.toLocaleString()} f CFA\n\nCette action est irréversible.`)) {
-      return;
-    }
-
-    setIsProcessing(true);
-
+    
+    // 2. Récupérer TOUS les paiements de la session
+    const { data: payments, error: paymentsError } = await supabase
+      .from('pos_payments')
+      .select('amount_paid, payment_method, change_amount, created_at, receipt_number')
+      .gte('created_at', cashRegister.opened_at)
+      .lte('created_at', new Date().toISOString())
+      .order('created_at', { ascending: true });
+    
+    if (paymentsError) throw new Error(`Paiements: ${paymentsError.message}`);
+    console.log(`✅ ${payments?.length || 0} paiements récupérés`);
+    
+    // 3. Récupérer les dépenses espèces
+    const { data: cashExpenses, error: expensesError } = await supabase
+      .from('expenses')
+      .select('amount, payment_method, description, created_at, expense_type')
+      .gte('created_at', cashRegister.opened_at)
+      .lte('created_at', new Date().toISOString())
+      .eq('payment_method', 'cash')
+      .eq('expense_type', 'cash_register');
+    
+    if (expensesError) throw new Error(`Dépenses: ${expensesError.message}`);
+    
+    const totalCashExpenses = (cashExpenses || []).reduce((sum, e) => sum + e.amount, 0);
+    
+    // 4. Calculer les totaux
+    const totals = (payments || []).reduce((acc, payment) => {
+      const netAmount = payment.amount_paid - (payment.change_amount || 0);
+      if (payment.payment_method === 'cash') {
+        acc.cash_sales += netAmount;
+        acc.total_cash_in += payment.amount_paid;
+        acc.total_change_out += payment.change_amount || 0;
+        acc.cash_transactions += 1;
+      } else if (payment.payment_method === 'mobile_money') {
+        acc.mobile_money_sales += netAmount;
+        acc.mobile_transactions += 1;
+      } else if (payment.payment_method === 'card') {
+        acc.card_sales += netAmount;
+        acc.card_transactions += 1;
+      }
+      acc.total_sales += netAmount;
+      acc.total_transactions += 1;
+      return acc;
+    }, {
+      cash_sales: 0, mobile_money_sales: 0, card_sales: 0,
+      total_sales: 0, total_cash_in: 0, total_change_out: 0,
+      cash_transactions: 0, mobile_transactions: 0, card_transactions: 0,
+      total_transactions: 0
+    });
+    
+    // 5. Calculer le solde attendu
+    const expectedBalance = cashRegister.opening_balance + totals.cash_sales - totalCashExpenses;
+    const difference = balance - expectedBalance;
+    
+    console.log('💰 Solde attendu:', expectedBalance, '| Réel:', balance, '| Écart:', difference);
+    
+    // 6. Générer le rapport
+    const reportContent = generateClosingReport(
+      { ...cashRegister, opened_by_user: openedByUser },
+      balance, expectedBalance, difference, totals, totalCashExpenses,
+      payments || [], cashExpenses || [], []
+    );
+    
+    // 7. Sauvegarder le rapport
+    let savedReport = null;
     try {
-      console.log('=== DÉBUT FERMETURE CAISSE ===');
-
-      let openedByUser = null;
-      if (cashRegister.opened_by) {
-        const userData = await loadOpenedByUser(cashRegister);
-        openedByUser = userData;
-      }
-
-      // Récupérer TOUS les paiements
-      const { data: payments, error: paymentsError } = await supabase
-        .from('pos_payments')
-        .select('amount_paid, payment_method, change_amount, created_at, receipt_number')
-        .gte('created_at', cashRegister.opened_at)
-        .lte('created_at', new Date().toISOString())
-        .order('created_at', { ascending: true });
-
-      if (paymentsError) {
-        console.error('❌ Erreur récupération paiements:', paymentsError);
-        throw new Error(`Erreur lors de la récupération des paiements: ${paymentsError.message}`);
-      }
-
-      console.log(`✅ ${payments?.length || 0} paiements récupérés`);
-
-      // Récupérer les DÉPENSES EN ESPÈCES DE CAISSE
-      const { data: cashExpenses, error: expensesError } = await supabase
-        .from('expenses')
-        .select('amount, payment_method, description, created_at, expense_type')
-        .gte('created_at', cashRegister.opened_at)
-        .lte('created_at', new Date().toISOString())
-        .eq('payment_method', 'cash')
-        .eq('expense_type', 'cash_register');
-
-      if (expensesError) {
-        console.error('❌ Erreur récupération dépenses:', expensesError);
-        throw new Error(`Erreur lors de la récupération des dépenses: ${expensesError.message}`);
-      }
-
-      const totalCashExpenses = (cashExpenses || []).reduce((sum, expense) => sum + expense.amount, 0);
-      console.log(`✅ ${cashExpenses?.length || 0} dépenses récupérées - Total: ${totalCashExpenses.toLocaleString()} f CFA`);
-
-      const totals = (payments || []).reduce((acc, payment) => {
-        const netAmount = payment.amount_paid - (payment.change_amount || 0);
-        
-        if (payment.payment_method === 'cash') {
-          acc.cash_sales += netAmount;
-          acc.total_cash_in += payment.amount_paid;
-          acc.total_change_out += payment.change_amount || 0;
-          acc.cash_transactions += 1;
-        } else if (payment.payment_method === 'mobile_money') {
-          acc.mobile_money_sales += netAmount;
-          acc.mobile_transactions += 1;
-        } else if (payment.payment_method === 'card') {
-          acc.card_sales += netAmount;
-          acc.card_transactions += 1;
-        }
-        
-        acc.total_sales += netAmount;
-        acc.total_transactions += 1;
-        return acc;
-      }, { 
-        cash_sales: 0, 
-        mobile_money_sales: 0, 
-        card_sales: 0, 
-        total_sales: 0,
-        total_cash_in: 0,
-        total_change_out: 0,
-        cash_transactions: 0,
-        mobile_transactions: 0,
-        card_transactions: 0,
-        total_transactions: 0
-      });
-
-      const { data: orders, error: ordersError } = await supabase
-        .from('pos_orders')
-        .select('id, order_number, total_amount, status, payment_method, paid_at')
-        .gte('paid_at', cashRegister.opened_at)
-        .lte('paid_at', new Date().toISOString())
-        .eq('status', 'paid')
-        .order('paid_at', { ascending: true });
-
-      if (ordersError) {
-        console.warn('⚠️ Erreur récupération commandes:', ordersError);
-      }
-
-      // SOLDE ATTENDU AVEC DÉPENSES DE CAISSE DÉDUITES
-      const expectedBalance = cashRegister.opening_balance + totals.cash_sales - totalCashExpenses;
-      const difference = balance - expectedBalance;
-
-      console.log('=== CALCULS DÉTAILLÉS ===');
-      console.log('Solde ouverture:', cashRegister.opening_balance.toLocaleString(), 'f CFA');
-      console.log('Ventes espèces nettes:', totals.cash_sales.toLocaleString(), 'f CFA');
-      console.log('Dépenses espèces caisse:', totalCashExpenses.toLocaleString(), 'f CFA');
-      console.log('Solde attendu:', expectedBalance.toLocaleString(), 'f CFA');
-      console.log('Solde réel:', balance.toLocaleString(), 'f CFA');
-      console.log('Différence:', difference.toLocaleString(), 'f CFA');
-
-      if (expectedBalance < 0) {
-        console.warn('⚠️ Solde attendu négatif - vérification recommandée');
-      }
-
-      // AJOUTER: Sauvegarder le rapport AVANT de fermer la caisse
-      let savedReport = null;
-      const reportContent = generateClosingReport(
-        { 
-          ...cashRegister, 
-          opened_by_user: openedByUser 
-        }, 
-        balance, 
-        expectedBalance, 
-        difference, 
-        totals, 
-        totalCashExpenses,
-        payments || [],
-        cashExpenses || [],
-        orders || []
-      );
-
-      try {
-        const { data: reportData, error: reportError } = await supabase
-          .from('cash_register_reports')
-          .insert({
-            cash_register_id: cashRegister.id,
-            report_date: new Date().toISOString().split('T')[0],
-            opening_balance: cashRegister.opening_balance,
-            closing_balance: balance,
-            expected_balance: expectedBalance,
-            difference: difference,
-            cash_sales: totals.cash_sales,
-            mobile_money_sales: totals.mobile_money_sales,
-            card_sales: totals.card_sales,
-            total_sales: totals.total_sales,
-            report_content: reportContent,
-            generated_by: user?.id
-          })
-          .select()
-          .single();
-
-        if (reportError) {
-          console.error('❌ Erreur sauvegarde rapport:', reportError);
-          throw new Error(`Erreur lors de la sauvegarde du rapport: ${reportError.message}`);
-        } else {
-          console.log('✅ Rapport sauvegardé avec succès');
-          savedReport = reportData;
-        }
-      } catch (reportSaveError) {
-        console.error('❌ Erreur lors de la sauvegarde du rapport:', reportSaveError);
-        // NE PAS arrêter la fermeture si erreur de rapport
-      }
-
-      // Mettre à jour la caisse avec les informations du rapport
-      const updateData = {
-        status: 'closed',
-        closed_at: new Date().toISOString(),
-        closing_balance: balance,
-        expected_balance: expectedBalance,
-        difference: difference,
-        total_cash_sales: totals.cash_sales,
-        total_mobile_sales: totals.mobile_money_sales,
-        total_card_sales: totals.card_sales,
-        total_sales: totals.total_sales,
-        total_expenses: totalCashExpenses,
-        closed_by: user.id,
-        notes: `Fermeture manuelle - Écart: ${difference.toLocaleString()} f CFA - Transactions: ${totals.total_transactions} (Espèces: ${totals.cash_transactions}, Mobile: ${totals.mobile_transactions}, Carte: ${totals.card_transactions})`,
-        report_id: savedReport?.id || null  // Lier le rapport à la caisse
-      };
-
-      const { error: updateError } = await supabase
-        .from('cash_register')
-        .update(updateData)
-        .eq('id', cashRegister.id);
-
-      if (updateError) {
-        console.error('❌ Erreur mise à jour caisse:', updateError);
-        throw new Error(`Erreur lors de la fermeture de la caisse: ${updateError.message}`);
-      }
-
-      console.log('✅ Caisse mise à jour avec succès');
-
-      // AJOUTER: IMPRIMER AUTOMATIQUEMENT LE RAPPORT
-      const printReport = (content: string) => {
-        const printWindow = window.open('', '_blank');
-        if (!printWindow) {
-          alert('Le pop-up a été bloqué. Veuillez autoriser les pop-ups pour imprimer le rapport.');
-          return;
-        }
-        
-        printWindow.document.write(content);
-        printWindow.document.close();
-        
-        setTimeout(() => {
-          printWindow.print();
-          setTimeout(() => {
-            printWindow.close();
-          }, 500);
-        }, 500);
-      };
-
-      // Générer et imprimer le rapport
-      printReport(reportContent);
-
-      setShowCloseForm(false);
-      setClosingBalance('');
-      await loadCashRegister();
-      await loadPendingOrders();
-
-      const successMessage = difference === 0 
-        ? `✅ Caisse fermée avec succès !\n\nSolde correct - Aucun écart\nRapport généré et imprimé.`
-        : `✅ Caisse fermée avec succès !\n\nÉcart détecté: ${difference.toLocaleString()} f CFA\n${difference > 0 ? 'Excédent' : 'Déficit'}\nRapport généré et imprimé.`;
-
-      alert(successMessage);
-
-      console.log('=== FERMETURE CAISSE TERMINÉE AVEC SUCCÈS ===');
-
-    } catch (error: any) {
-      console.error('❌ ERREUR FERMETURE CAISSE:', error);
+      const { data: reportData, error: reportError } = await supabase
+        .from('cash_register_reports')
+        .insert({
+          cash_register_id: cashRegister.id,
+          report_date: new Date().toISOString().split('T')[0],
+          opening_balance: cashRegister.opening_balance,
+          closing_balance: balance,
+          expected_balance: expectedBalance,
+          difference: difference,
+          cash_sales: totals.cash_sales,
+          mobile_money_sales: totals.mobile_money_sales,
+          card_sales: totals.card_sales,
+          total_sales: totals.total_sales,
+          report_content: reportContent,
+          generated_by: user?.id
+        })
+        .select()
+        .single();
       
-      let errorMessage = 'Erreur lors de la fermeture de la caisse';
-      
-      if (error.message.includes('paiements')) {
-        errorMessage = 'Erreur de connexion à la base de données. Vérifiez votre connexion internet.';
-      } else if (error.message.includes('dépenses')) {
-        errorMessage = 'Erreur lors de la récupération des dépenses. Contactez l\'administrateur.';
-      } else if (error.message.includes('mise à jour')) {
-        errorMessage = 'Erreur système. La caisse n\'a pas pu être fermée. Réessayez.';
+      if (reportError) {
+        console.error('⚠️ Erreur sauvegarde rapport:', reportError);
+      } else {
+        savedReport = reportData;
+        console.log('✅ Rapport sauvegardé:', savedReport.id);
       }
-      
-      alert(`${errorMessage}\n\nDétails: ${error.message}`);
-    } finally {
-      setIsProcessing(false);
+    } catch (reportErr) {
+      console.error('⚠️ Erreur rapport:', reportErr);
     }
-  };
+    
+    // 🔥 8. FERMER LA CAISSE (UPDATE atomique avec vérification)
+    const updateData = {
+      status: 'closed',
+      closed_at: new Date().toISOString(),
+      closing_balance: balance,
+      expected_balance: expectedBalance,
+      difference: difference,
+      total_cash_sales: totals.cash_sales,
+      total_mobile_sales: totals.mobile_money_sales,
+      total_card_sales: totals.card_sales,
+      total_sales: totals.total_sales,
+      total_expenses: totalCashExpenses,
+      closed_by: user.id,
+      notes: `Fermeture - Écart: ${difference} f CFA - ${totals.total_transactions} transactions`,
+      report_id: savedReport?.id || null
+    };
+    
+    console.log('📝 Données UPDATE:', updateData);
+    
+    const { data: updatedData, error: updateError } = await supabase
+      .from('cash_register')
+      .update(updateData)
+      .eq('id', cashRegister.id)
+      .eq('status', 'open')  // 🔥 Sécurité : ne fermer que si encore open
+      .select()
+      .single();
+    
+    if (updateError) {
+      console.error('❌ Erreur UPDATE caisse:', updateError);
+      throw new Error(`Fermeture: ${updateError.message}`);
+    }
+    
+    console.log('✅ Caisse fermée avec succès:', updatedData);
+    
+    // 🔥 9. VÉRIFICATION : s'assurer qu'aucune autre caisse n'est restée open
+    const { data: remainingOpen, error: checkError } = await supabase
+      .from('cash_register')
+      .select('id, opened_at')
+      .eq('status', 'open');
+    
+    if (!checkError && remainingOpen && remainingOpen.length > 0) {
+      console.warn(`⚠️ ${remainingOpen.length} autre(s) caisse(s) encore open - fermeture automatique`);
+      await supabase
+        .from('cash_register')
+        .update({ status: 'closed', closed_at: new Date().toISOString(), notes: 'Fermée auto (nettoyage)' })
+        .in('id', remainingOpen.map(c => c.id));
+    }
+    
+    // 10. Imprimer le rapport
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write(reportContent);
+      printWindow.document.close();
+      setTimeout(() => {
+        printWindow.print();
+        setTimeout(() => printWindow.close(), 500);
+      }, 500);
+    }
+    
+    // 11. Reset UI
+    setShowCloseForm(false);
+    setClosingBalance('');
+    await loadCashRegister();  // 🔥 Recharger pour mettre à jour l'UI
+    await loadPendingOrders();
+    
+    const successMsg = difference === 0
+      ? `✅ Caisse fermée avec succès !\nSolde correct - Aucun écart\nRapport généré et imprimé.`
+      : `✅ Caisse fermée !\nÉcart: ${difference.toLocaleString()} f CFA\n${difference > 0 ? 'Excédent' : 'Déficit'}`;
+    
+    alert(successMsg);
+    console.log('=== ✅ FERMETURE CAISSE TERMINÉE ===');
+    
+  } catch (error: any) {
+    console.error('❌ ERREUR FERMETURE:', error);
+    alert(`Erreur: ${error.message || 'Erreur inconnue'}`);
+  } finally {
+    setIsProcessing(false);
+  }
+};
 
   // AJOUTER cette fonction pour générer un rapport imprimable complet
   const generatePrintableReport = (

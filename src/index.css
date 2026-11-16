@@ -2,25 +2,71 @@
 @tailwind components;
 @tailwind utilities;
 
-/* src/index.css - Ajouter à la fin */
+/* ==========================================
+   STYLES GLOBAUX DE BASE
+   ========================================== */
 button {
-    cursor: pointer;
+  cursor: pointer;
 }
 
 button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
-/* Bouton d'inscription */
-.border-blue-600 {
-    border-color: #2563eb !important;
+/* ==========================================
+   ANIMATIONS PERSONNALISÉES
+   ========================================== */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
-.text-blue-600 {
-    color: #2563eb !important;
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(30px); }
+  to { opacity: 1; transform: translateX(0); }
 }
 
-.hover\:bg-blue-50:hover {
-    background-color: #eff6ff !important;
+@keyframes shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+@keyframes pulseSoft {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+
+@keyframes cartBounce {
+  0%, 100% { transform: scale(1); }
+  30% { transform: scale(1.3); }
+  60% { transform: scale(0.9); }
+}
+
+/* ==========================================
+   CLASSES UTILITAIRES PERSONNALISÉES
+   ========================================== */
+.animate-fade-in { animation: fadeInUp 0.4s ease-out both; }
+.animate-slide-in { animation: slideInRight 0.3s ease-out both; }
+.animate-cart-bounce { animation: cartBounce 0.5s ease; }
+
+/* Skeleton shimmer (effet de chargement) */
+.skeleton {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 400px 100%;
+  animation: shimmer 1.4s infinite;
+}
+
+/* Retour tactile universel pour mobile */
+button:active, .tapable:active { transform: scale(0.97); }
+.tapable { transition: transform 0.1s ease; }
+
+/* Scrollbar cachée pour les défilements horizontaux (catégories, etc.) */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* Glassmorphism (effet de verre dépoli) */
+.glass {
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
 }

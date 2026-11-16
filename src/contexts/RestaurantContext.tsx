@@ -24,14 +24,13 @@ interface RestaurantContextType {
 
 const RestaurantContext = createContext<RestaurantContextType | undefined>(undefined);
 
-// Valeurs par défaut
 const defaultSettings: RestaurantSettings = {
-  name: 'Terra Cotta',
-  address: '',
-  phone: '',
-  email: '',
+  name: 'LA TERRA COTTA OUAGA',
+  address: 'Ouagadougou, Burkina Faso',
+  phone: '04 04 34 35',
+  email: 'contact@terracotta.bf',
   currency: 'f CFA',
-  tax_rate: 10,
+  tax_rate: 0,
   logo_url: '',
   theme_color: 'blue',
   language: 'fr'
@@ -45,7 +44,6 @@ export function RestaurantProvider({ children }: { children: ReactNode }) {
     try {
       console.log('🔧 Chargement des paramètres du restaurant...');
       
-      // Utilisez .limit(1) au lieu de .single() pour éviter l'erreur 406
       const { data, error } = await supabase
         .from('restaurant_settings')
         .select('*')
@@ -53,8 +51,11 @@ export function RestaurantProvider({ children }: { children: ReactNode }) {
         .limit(1);
 
       if (error) {
-        console.error('❌ Erreur lors du chargement des paramètres:', error);
-        setSettings(defaultSettings);
+        // 🔥 CORRECTION : Extraire le vrai message d'erreur de manière fiable
+        const errorMsg = error.message || JSON.stringify(error) || 'Erreur inconnue';
+        console.error('❌ Erreur Supabase chargement paramètres:', errorMsg);
+        console.error('Détails complets:', error);
+        setSettings(defaultSettings); // Fallback pour ne pas bloquer l'app
       } else if (data && data.length > 0) {
         console.log('✅ Paramètres chargés avec succès:', data[0]);
         setSettings(data[0]);
@@ -62,8 +63,9 @@ export function RestaurantProvider({ children }: { children: ReactNode }) {
         console.log('📝 Aucun paramètre trouvé, création des paramètres par défaut...');
         await createDefaultSettings();
       }
-    } catch (error) {
-      console.error('💥 Erreur inattendue:', error);
+    } catch (error: any) {
+      const errorMsg = error?.message || JSON.stringify(error) || 'Erreur inattendue';
+      console.error('💥 Erreur inattendue chargement paramètres:', errorMsg);
       setSettings(defaultSettings);
     } finally {
       setLoading(false);
@@ -81,44 +83,40 @@ export function RestaurantProvider({ children }: { children: ReactNode }) {
         .single();
 
       if (error) {
-        console.error('❌ Erreur lors de la création des paramètres par défaut:', error);
+        console.error('❌ Erreur création paramètres par défaut:', error.message || JSON.stringify(error));
         setSettings(defaultSettings);
       } else if (data) {
         console.log('✅ Paramètres par défaut créés:', data);
         setSettings(data);
       }
-    } catch (error) {
-      console.error('💥 Erreur lors de la création des paramètres:', error);
+    } catch (error: any) {
+      console.error('💥 Erreur inattendue création paramètres:', error?.message || error);
       setSettings(defaultSettings);
     }
   };
 
   const updateSettings = async (newSettings: Partial<RestaurantSettings>) => {
     try {
-      // Si nous n'avons pas d'ID, c'est qu'aucun enregistrement n'existe
       if (!settings.id) {
         const { data, error } = await supabase
           .from('restaurant_settings')
           .insert([{ ...defaultSettings, ...newSettings }])
           .select()
           .single();
-
         if (error) throw error;
         if (data) setSettings(data);
       } else {
-        // Mettre à jour l'enregistrement existant
         const { data, error } = await supabase
           .from('restaurant_settings')
           .update(newSettings)
           .eq('id', settings.id)
           .select()
           .single();
-
         if (error) throw error;
         if (data) setSettings(data);
       }
-    } catch (error) {
-      console.error('Error updating settings:', error);
+    } catch (error: any) {
+      console.error('Error updating settings:', error.message || error);
       throw error;
     }
   };
@@ -129,8 +127,8 @@ export function RestaurantProvider({ children }: { children: ReactNode }) {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-lg">Chargement des paramètres...</div>
+      <div className="flex items-center justify-center min-h-screen bg-white">
+        <div className="text-lg text-slate-600">Chargement des paramètres...</div>
       </div>
     );
   }

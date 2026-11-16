@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Fond dégradé Terra Cotta -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:type="linear"
+                android:angle="135"
+                android:startColor="#C1440E"
+                android:centerColor="#D95034"
+                android:endColor="#F5A623" />
+        </shape>
+    </item>
+    
+    <!-- Cercle décoratif animé -->
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#FFFFFF" android:alpha="0.1" />
+            <size android:width="400dp" android:height="400dp" />
+        </shape>
+    </item>
+</layer-list>

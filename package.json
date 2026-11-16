@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:mobile": "vite --config vite.config.mobile.ts --host", 
+    "dev:mobile": "vite --config vite.config.mobile.ts --host",
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint .",
@@ -39,6 +39,7 @@
     "qrcode.react": "^4.2.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-hot-toast": "^2.6.1",
     "react-router-dom": "^7.9.5",
     "recharts": "^3.4.1",
     "uuid": "^14.0.1"

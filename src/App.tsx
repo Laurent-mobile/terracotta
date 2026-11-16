@@ -1,5 +1,3 @@
-// src/App.tsx - VERSION CORRIGÉE COMPLÈTE
-
 import { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { RestaurantProvider } from './contexts/RestaurantContext';
@@ -9,7 +7,6 @@ import InventoryView from './components/inventory/InventoryView';
 import SuppliersView from './components/suppliers/SuppliersView';
 import ExpensesView from './components/expenses/ExpensesView';
 import SalesView from './components/sales/SalesView';
-import ReportsView from './components/reports/ReportsView';
 import Sidebar from './components/layout/Sidebar';
 import MultiOrderManager from './components/pos/MultiOrderManager';
 import './App.css';
@@ -37,7 +34,7 @@ import { SplashScreen } from '@capacitor/splash-screen';
 const isMobile = Capacitor.isNativePlatform();
 
 // ============================================
-// ✅ NOUVELLE NAVIGATION MOBILE - UNIQUEMENT CLIENTS
+// ✅ NAVIGATION MOBILE MODERNE (Glassmorphism)
 // ============================================
 function MobileNavigation({
   currentView,
@@ -46,10 +43,8 @@ function MobileNavigation({
   currentView: string;
   onViewChange: (view: string) => void;
 }) {
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const { signOut } = useAuth();
 
-  // ✅ UNIQUEMENT 3 BOUTONS POUR LE CLIENT
   const navItems = [
     { id: 'client-menu', label: 'Menu', icon: '🍽️' },
     { id: 'client-cart', label: 'Panier', icon: '🛒' },
@@ -57,7 +52,7 @@ function MobileNavigation({
   ];
 
   const handleLogout = async () => {
-    if (confirm('Voulez-vous vraiment vous déconnecter ?')) {
+    if (window.confirm('Voulez-vous vraiment vous déconnecter ?')) {
       await signOut();
     }
   };
@@ -65,20 +60,14 @@ function MobileNavigation({
   return (
     <>
       {/* Barre de navigation supérieure */}
-      <header className="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-10">
+      <header className="bg-white/90 backdrop-blur-md shadow-sm border-b border-gray-200 sticky top-0 z-40">
         <div className="px-4 py-3 flex items-center justify-between">
-          <button
-            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            className="p-2 hover:bg-gray-100 rounded-lg transition"
-          >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
-          </button>
-          <h1 className="text-lg font-bold text-gray-900">🍽️ Terra Cotta</h1>
+          <h1 className="text-lg font-bold text-terracotta-700 flex items-center gap-2">
+            <span>🍽️</span> Terra Cotta
+          </h1>
           <button
             onClick={handleLogout}
-            className="p-2 hover:bg-red-50 rounded-lg transition text-red-600"
+            className="p-2 hover:bg-red-50 rounded-full transition text-red-600 active:scale-95"
             title="Déconnexion"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -88,94 +77,53 @@ function MobileNavigation({
         </div>
       </header>
 
-      {/* Sidebar mobile */}
-      {isSidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black bg-opacity-50 z-40"
-          onClick={() => setIsSidebarOpen(false)}
-        >
-          <div
-            className="w-72 h-full bg-white shadow-xl overflow-y-auto flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="p-4 border-b border-gray-200">
-              <h2 className="font-bold text-gray-900">Menu</h2>
-            </div>
-            <nav className="flex-1 p-4 space-y-2">
-              {navItems.map((item) => {
-                const isActive = currentView === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => {
-                      onViewChange(item.id);
-                      setIsSidebarOpen(false);
-                    }}
-                    className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition ${isActive
-                      ? 'bg-blue-50 text-blue-600'
-                      : 'text-gray-700 hover:bg-gray-100'
-                      }`}
-                  >
-                    <span className="text-xl">{item.icon}</span>
-                    <span className="font-medium">{item.label}</span>
-                  </button>
-                );
-              })}
-            </nav>
-            <div className="border-t border-gray-200 p-4">
-              <button
-                onClick={handleLogout}
-                className="w-full flex items-center justify-center space-x-2 bg-red-50 text-red-600 py-3 rounded-lg hover:bg-red-100 transition"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                </svg>
-                <span>Se déconnecter</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ✅ BARRE DE NAVIGATION INFÉRIEURE - 3 BOUTONS UNIQUEMENT */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-50">
-        <div className="flex justify-around items-center h-16 px-2 max-w-md mx-auto">
-          {navItems.map((item) => {
-            const isActive = currentView === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => onViewChange(item.id)}
-                className={`flex flex-col items-center justify-center flex-1 py-1 relative ${isActive ? 'text-blue-600' : 'text-gray-500'
+      {/* ✅ BARRE DE NAVIGATION INFÉRIEURE MODERNE */}
+      <nav className="fixed bottom-0 left-0 right-0 z-50 px-4 pb-[max(env(safe-area-inset-bottom),8px)] pt-2">
+        <div className="bg-white/90 backdrop-blur-md border border-gray-200/50 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] rounded-t-3xl">
+          <div className="flex justify-around items-center h-16 px-2 max-w-md mx-auto">
+            {navItems.map((item) => {
+              const isActive = currentView === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => onViewChange(item.id)}
+                  className={`relative flex flex-col items-center justify-center flex-1 py-1 transition-all duration-300 active:scale-95 ${
+                    isActive ? 'text-terracotta-700 -translate-y-1' : 'text-gray-400 hover:text-gray-600'
                   }`}
-              >
-                <span className="text-xl">{item.icon}</span>
-                <span className={`text-xs mt-0.5 ${isActive ? 'font-medium' : ''}`}>
-                  {item.label}
-                </span>
-              </button>
-            );
-          })}
+                >
+                  {isActive && (
+                    <span className="absolute -top-2 w-8 h-1 bg-terracotta-700 rounded-full" />
+                  )}
+                  <span className={`text-2xl transition-transform ${isActive ? 'scale-110' : ''}`}>
+                    {item.icon}
+                  </span>
+                  <span className={`text-[10px] mt-1 font-medium ${isActive ? 'text-terracotta-700' : ''}`}>
+                    {item.label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </nav>
     </>
   );
 }
 
+// ============================================
+// ✅ CONTENU PRINCIPAL DE L'APPLICATION
+// ============================================
 function AppContent() {
   const { user, loading } = useAuth();
   const { userRole, loading: permissionsLoading } = usePermissions();
   const [currentView, setCurrentView] = useState<string>('');
 
-  // Vérifier si on est sur la route publique du menu
   const isPublicMenuRoute = window.location.pathname === '/menu';
 
-  // Si c'est la route publique, afficher uniquement le menu
   if (isPublicMenuRoute) {
     return <MenuView />;
   }
 
-  // Initialisation de Capacitor pour le mobile
   useEffect(() => {
     const initMobile = async () => {
       if (Capacitor.isNativePlatform()) {
@@ -183,7 +131,7 @@ function AppContent() {
           await SplashScreen.hide();
           await StatusBar.setStyle({ style: 'dark' });
           await StatusBar.setBackgroundColor({ color: '#ffffff' });
-          console.log('📱 Application mobile initialisée');
+          console.log('📱 Application mobile initialisée avec succès');
         } catch (error) {
           console.error('Erreur initialisation mobile:', error);
         }
@@ -192,11 +140,9 @@ function AppContent() {
     initMobile();
   }, []);
 
-  // Déterminer la vue par défaut
   useEffect(() => {
     if (!permissionsLoading && !currentView) {
       if (isMobile) {
-        // ✅ SUR MOBILE : TOUJOURS CLIENT
         setCurrentView('client-menu');
       } else if (userRole === 'cashier') {
         setCurrentView('orders');
@@ -206,10 +152,13 @@ function AppContent() {
     }
   }, [userRole, permissionsLoading, currentView]);
 
-  if (loading) {
+  if (loading || permissionsLoading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="text-xl font-semibold text-slate-700">Chargement...</div>
+      <div className="min-h-screen bg-cream-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-terracotta-700 mx-auto mb-4"></div>
+          <div className="text-lg font-semibold text-gray-700">Chargement de l'application...</div>
+        </div>
       </div>
     );
   }
@@ -220,15 +169,12 @@ function AppContent() {
 
   const renderView = () => {
     switch (currentView) {
-      // ✅ VUES CLIENT
       case 'client-menu':
       case 'client-cart':
       case 'client-checkout':
       case 'client-tracking':
       case 'client-history':
         return <ClientDashboard currentView={currentView} onViewChange={setCurrentView} />;
-
-      // VUES PERSONNEL
       case 'dashboard':
         return <ProtectedComponent requiredView="dashboard"><DashboardView /></ProtectedComponent>;
       case 'orders':
@@ -269,10 +215,9 @@ function AppContent() {
     }
   };
 
-  // 📱 SUR MOBILE : UNIQUEMENT L'INTERFACE CLIENT
   if (isMobile) {
     return (
-      <div className="min-h-screen bg-gray-50 pb-16">
+      <div className="min-h-screen bg-cream-50">
         <MobileNavigation
           currentView={currentView}
           onViewChange={setCurrentView}
@@ -284,11 +229,10 @@ function AppContent() {
     );
   }
 
-  // 💻 SUR WEB : UNIQUEMENT L'INTERFACE PERSONNEL
   return (
-    <div className="flex h-screen bg-slate-50">
+    <div className="flex h-screen bg-gray-50 overflow-hidden">
       <Sidebar currentView={currentView} onViewChange={setCurrentView} />
-      <main className="flex-1 overflow-auto">
+      <main className="flex-1 overflow-y-auto">
         {renderView()}
       </main>
     </div>
